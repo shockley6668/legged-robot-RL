@@ -107,15 +107,13 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         global_reference = False
 
         class ranges:
-            # PHASE 1: Pure Standing Training (zero velocity) - WITH LOWER SPAWN HEIGHT
-            lin_vel_x = [0.0, 0.0]  # min max [m/s] FORCE STATIC
-            lin_vel_y = [0.0, 0.0]  # min max [m/s] FORCE STATIC
-            ang_vel_yaw = [0.0, 0.0]  # min max [rad/s] FORCE STATIC
+            # PHASE 2: Mixed Walking (40%) + Standing (60%) Training
+            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
+            lin_vel_y = [-0.5, 0.5]  # min max [m/s]
+            ang_vel_yaw = [-1.5, 1.5]  # min max [rad/s]
             
-            # PHASE 2: Mixed Training (uncomment after Phase 1 succeeds)
-            # lin_vel_x = [-0.5, 0.5]  # min max [m/s]
-            # lin_vel_y = [-0.5, 0.5]  # min max [m/s]
-            # ang_vel_yaw = [-1.5, 1.5]  # min max [rad/s]
+            # Note: 60% of envs will have stop_flag=0 (zero velocity commands)
+            # 40% will use these ranges (walking commands)
             
             heading = [-3.14, 3.14]
             height = [0.12 , 0.2] # m
@@ -186,7 +184,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             # ADJUSTED penalties for standing still
             stand_still = -1.5              # Static penalty
             stand_still_force = -1.0         # Force penalty
-            stand_still_step_punish = -5.0   # Step penalty (HEAVILY INCREASED for quiet standing!)
+            stand_still_step_punish = -15.0  # Step penalty (HEAVILY INCREASED - was -5.0)
             base_stability = -2.0            # Stability penalty
 
             feet_air_time = 3

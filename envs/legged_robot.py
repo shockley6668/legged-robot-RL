@@ -1707,9 +1707,12 @@ class LeggedRobot(BaseTask):
         # 2. Force Disable Heading (Set to 0)
         self.commands[env_ids, 3] = 0.
 
-        # 3. Disable Stop Flag - Testing (100% Move)
-        # All environments will use normal velocity sampling
-        self.commands[env_ids, 4] = 1.0  # All move (no stop)
+        # 3. Mixed Training: 60% Standing + 40% Walking
+        # Use hash for better distribution across env_ids
+        # 60% of envs will have stop_flag=0.0 (zero velocity)
+        # 40% will have stop_flag=1.0 (normal walking velocity)
+        random_vals = torch.rand(len(env_ids), device=self.device)
+        self.commands[env_ids, 4] = (random_vals > 0.6).float()  # 60% stop, 40% move
         
         # 4. Stop Logic
         should_stop = self.commands[env_ids, 4] == 0.0
