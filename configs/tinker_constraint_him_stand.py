@@ -367,8 +367,8 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         max_iterations = MAX_ITER #最大训练回合
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
-        resume = False
-        resume_path =  '/home/pi/Downloads/back_good/LocomotionWithNP3O-masteroldxgoo2/LocomotionWithNP3O-masteroldx/logs/rough_go2_constraint/Dec17_12-41-23_test_barlowtwins/model_20000.pt'
+        resume = True
+        resume_path = '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/modelt.pt'
  
 
   

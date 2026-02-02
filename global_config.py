@@ -15,7 +15,7 @@ SPD_YAW = 0
 
 #train param
 MAX_ITER = 30000
-SAVE_DIV = 2000
+SAVE_DIV = 500
 
 
 #./compile XX.urdf XX.xml

@@ -219,6 +219,9 @@ class NP3O:
                             param_group['lr'] = self.learning_rate
 
 
+                # Normalize advantages for stable training
+                advantages_batch = (advantages_batch - advantages_batch.mean()) / (advantages_batch.std() + 1e-8)
+
                 surrogate_loss = self.compute_surrogate_loss(actions_log_prob_batch=actions_log_prob_batch,
                                                          old_actions_log_prob_batch=old_actions_log_prob_batch,
                                                          advantages_batch=advantages_batch)

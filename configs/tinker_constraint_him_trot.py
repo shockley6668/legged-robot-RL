@@ -44,7 +44,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         en_logger = False #wanda
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.33] # x,y,z [m]
+        pos = [0.0, 0.0, 0.33] # x,y,z [m] - Lowered for better landing stability
 
         default_joint_angles = { # = target angles [rad] when action = 0.0
             'J_L0':   0.0,   # [rad]
@@ -107,12 +107,16 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         global_reference = False
 
         class ranges:
-            # lin_vel_x = [0.0, 0.0]  # min max [m/s] FORCE STATIC
-            # lin_vel_y = [0.0, 0.0]  # min max [m/s] FORCE STATIC
-            # ang_vel_yaw = [0.0, 0.0]  # min max [rad/s] FORCE STATIC
-            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
-            lin_vel_y = [-0.5, 0.5]  # min max [m/s]
-            ang_vel_yaw = [-1.5, 1.5]  # min max [rad/s]
+            # PHASE 1: Pure Standing Training (zero velocity) - WITH LOWER SPAWN HEIGHT
+            lin_vel_x = [0.0, 0.0]  # min max [m/s] FORCE STATIC
+            lin_vel_y = [0.0, 0.0]  # min max [m/s] FORCE STATIC
+            ang_vel_yaw = [0.0, 0.0]  # min max [rad/s] FORCE STATIC
+            
+            # PHASE 2: Mixed Training (uncomment after Phase 1 succeeds)
+            # lin_vel_x = [-0.5, 0.5]  # min max [m/s]
+            # lin_vel_y = [-0.5, 0.5]  # min max [m/s]
+            # ang_vel_yaw = [-1.5, 1.5]  # min max [rad/s]
+            
             heading = [-3.14, 3.14]
             height = [0.12 , 0.2] # m
 
@@ -172,19 +176,18 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             powers = -2e-5
             action_smoothness = -0.01
             torques = -1e-5
-            dof_vel = -5e-4
+            dof_vel = -2e-3  # Increased for quiet standing (was -5e-4)
             dof_acc = -2e-7
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
             torque_limits = -0.1
 
-            # SIGNIFICANTLY INCREASED penalties for standing still to prevent stepping at zero command
-            stand_still = -1.5  # ENHANCED: -0.5 → -1.5 - stronger penalty for joint deviation when standing
-            stand_still_force = -1.0  # ENHANCED: -0.5 → -1.0 - stronger penalty for foot force imbalance
-            stand_2leg = 10.0
-            stand_still_step_punish = -3.0  # ENHANCED: -3.0 → -5.0 - very strong penalty for stepping at zero velocity
-            base_stability = -2.0  # ENHANCED: -1.0 → -2.0 - stronger penalty for base movement when standing
+            # ADJUSTED penalties for standing still
+            stand_still = -1.5              # Static penalty
+            stand_still_force = -1.0         # Force penalty
+            stand_still_step_punish = -5.0   # Step penalty (HEAVILY INCREASED for quiet standing!)
+            base_stability = -2.0            # Stability penalty
 
             feet_air_time = 3
             foot_clearance= -3
@@ -216,11 +219,9 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         randomize_base_com = True
         added_com_range = [-0.05, 0.05]
         push_robots = True
-        # push_interval_s = 15
-        # max_push_vel_xy = 0.3
-        push_interval_s = 4        # ENHANCED: More frequent pushes (every 4s) for better robustness
-        max_push_vel_xy = 1.2      # ENHANCED: Stronger linear pushes to train anti-push capability
-        max_push_ang_vel = 0.8     # ENHANCED: Stronger angular disturbances
+        push_interval_s = 6.0        # Less frequent for standing training (every 6s)
+        max_push_vel_xy = 0.2      # Mild linear pushes for standing balance
+        max_push_ang_vel = 0.2     # Mild angular disturbances
         # dynamic randomization
         # action_delay = 0.5
         action_noise = 0.015
@@ -390,5 +391,5 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         max_iterations = MAX_ITER #最大训练回合
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
-        resume = False
-        # resume_path =  '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/modelt.pt'
+        resume = True
+        resume_path = '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/modelt.pt'

@@ -802,11 +802,6 @@ class LeggedRobot(BaseTask):
         # Heading Logic REMOVED/DISABLED by FSR FIX
         # if False and self.cfg.commands.heading_command: ...
 
-        # SAFETY NET: Force zero check at every step to catch any overrides
-        STOP_RATE = 0.5
-        should_stop = torch.abs(self.commands[:, 4]) <= STOP_RATE
-        self.commands[should_stop, :4] = 0. # Force zero everything including heading
-
 
         if self.cfg.terrain.measure_heights:
             self.measured_heights = self._get_heights()
@@ -1121,25 +1116,29 @@ class LeggedRobot(BaseTask):
         self.time_out_buf = self.episode_length_buf > self.max_episode_length  # no terminal reward for time-outs
 
         # Termination for velocities, orientation, and low height
+        # RELAXED FOR STANDING TRAINING PHASE 1
         self.reset_buf |= torch.any(
           torch.norm(self.base_lin_vel, dim=-1, keepdim=True) > 10., dim=1)
 
         self.reset_buf |= torch.any(
           torch.norm(self.base_ang_vel, dim=-1, keepdim=True) > 10., dim=1)
 
+        # RELAXED: Allow more tilt during standing training (0.8 → 0.95 ≈ 72 degrees)
         self.reset_buf |= torch.any(
-          torch.abs(self.projected_gravity[:, 0:1]) > 0.8, dim=1)
+          torch.abs(self.projected_gravity[:, 0:1]) > 0.95, dim=1)
 
         self.reset_buf |= torch.any(
-          torch.abs(self.projected_gravity[:, 1:2]) > 0.8, dim=1)
+          torch.abs(self.projected_gravity[:, 1:2]) > 0.95, dim=1)
         
         # self.base_pos = self.root_states[:, 0:3]
         # self.reset_buf |= torch.any(self.base_pos[:, 2:3] < 0.1, dim=1)
 
-        # Terminate if violent shaking occurs when commanded to stand still
-        is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
-        excessive_joint_vel = torch.norm(self.dof_vel, dim=1) > 10.0  # rad/s
-        self.reset_buf |= (is_static & excessive_joint_vel)
+        # DISABLED FOR STANDING TRAINING: This kills learning!
+        # When learning to stand, robot NEEDS to move joints to find balance
+        # Re-enable in Phase 2 after standing is learned
+        # is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
+        # excessive_joint_vel = torch.norm(self.dof_vel, dim=1) > 20.0  # rad/s
+        # self.reset_buf |= (is_static & excessive_joint_vel)
 
         self.reset_buf |= self.time_out_buf
 
@@ -1708,10 +1707,9 @@ class LeggedRobot(BaseTask):
         # 2. Force Disable Heading (Set to 0)
         self.commands[env_ids, 3] = 0.
 
-        # 3. Sample Stop Flag - Curriculum Step 1 (10% Stop)
-        # 10% Stop (0.0), 90% Move (1.0)
-        # Re-introducing stop command gently after verifying physics stability
-        self.commands[env_ids, 4] = (env_ids % 10 != 0).float()
+        # 3. Disable Stop Flag - Testing (100% Move)
+        # All environments will use normal velocity sampling
+        self.commands[env_ids, 4] = 1.0  # All move (no stop)
         
         # 4. Stop Logic
         should_stop = self.commands[env_ids, 4] == 0.0

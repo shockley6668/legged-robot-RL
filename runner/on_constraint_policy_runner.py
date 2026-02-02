@@ -42,15 +42,25 @@ class OnConstraintPolicyRunner:
                                                       self.env.num_actions,
                                                       **self.policy_cfg)
         if self.cfg['resume']:
-            model_dict = torch.load(os.path.join(ROOT_DIR, self.cfg['resume_path']))
-            if isinstance(model_dict, dict) and 'model_state_dict' in model_dict:
-                actor_critic.load_state_dict(model_dict['model_state_dict'])
+            loaded_model = torch.load(os.path.join(ROOT_DIR, self.cfg['resume_path']))
+            if isinstance(loaded_model, dict) and 'model_state_dict' in loaded_model:
+                # Standard checkpoint with state_dict
+                print(f"Loading model state_dict from checkpoint: {self.cfg['resume_path']}")
+                actor_critic.load_state_dict(loaded_model['model_state_dict'])
+            elif isinstance(loaded_model, dict):
+                # Dict but no 'model_state_dict' key, try to load directly
+                print(f"Loading model from dict (no model_state_dict key): {self.cfg['resume_path']}")
+                actor_critic.load_state_dict(loaded_model)
             else:
-                print("Warning: Loaded model is not a dictionary, attempting to load state_dict from object...")
-                if hasattr(model_dict, 'state_dict'):
-                    actor_critic.load_state_dict(model_dict.state_dict())
+                # Complete model object saved with torch.save(model)
+                print(f"Loaded complete model object from: {self.cfg['resume_path']}")
+                print(f"Type: {type(loaded_model)}")
+                if hasattr(loaded_model, 'state_dict'):
+                    print("Extracting state_dict from loaded model...")
+                    actor_critic.load_state_dict(loaded_model.state_dict())
                 else:
-                    actor_critic.load_state_dict(model_dict)
+                    # Fallback: try to use as state_dict directly
+                    actor_critic.load_state_dict(loaded_model)
         
         actor_critic.to(self.device)
         
