@@ -6,7 +6,8 @@ ENVS_DIR = os.path.join(ROOT_DIR,'Env')
 ROBOT_SEL = 'Tinker'
 #Trot Stand
 GAIT_SEL = 'Trot'
-PLAY_DIR = os.path.join(ROOT_DIR, 'modelt_test.pt')
+# PLAY_DIR = os.path.join(ROOT_DIR, 'modelt_test.pt')
+PLAY_DIR = "/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/logs/rough_go2_constraint/Feb02_20-27-21_test_barlowtwins/model_26000.pt"
 #Sim2Sim Cmd
 SPD_X = 0.0
 SPD_Y = 0.0

@@ -1828,11 +1828,21 @@ class LeggedRobot(BaseTask):
         """
         Calculates the reward for maintaining a flat base orientation. It penalizes deviation 
         from the desired base orientation using the base euler angles and the projected gravity vector.
+        
+        MODIFIED: Reduce reward during standing to avoid "stepping to improve orientation" exploit.
         """
         quat_mismatch = torch.exp(-torch.sum(torch.abs(self.base_euler_xyz[:, :2]), dim=1) * 10)
         orientation = torch.exp(-torch.norm(self.projected_gravity[:, :2], dim=1) * 20)
-        return quat_mismatch#
-        #return (quat_mismatch + orientation) / 2.
+        
+        # Check if commanded to stand still
+        is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
+        
+        # Reduce orientation reward during standing (10x reduction)
+        # This prevents robot from stepping to fine-tune orientation when commanded to stand
+        reward = quat_mismatch
+        reward = torch.where(is_static, reward * 0.05, reward)  # 20x reduction when standing
+        
+        return reward
 
     def _reward_joint_ref_pos(self):# 期望关节角度轨迹
         """
@@ -1927,7 +1937,14 @@ class LeggedRobot(BaseTask):
         base_height = self._get_base_heights()
         #print(base_height[0],self.cfg.rewards.base_height_target)
         #return torch.square(base_height - self.cfg.rewards.base_height_target)
-        return torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 100)
+        
+        # MODIFIED: Conditioned reward to prevent stepping for height adjustment
+        reward = torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 100)
+        
+        is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
+        reward = torch.where(is_static, reward * 0.1, reward)  # 10x reduction when standing
+        
+        return reward
     
     def _reward_torques(self):
         # Penalize torques
