@@ -1051,7 +1051,8 @@ class LeggedRobot(BaseTask):
         return props
     
     def _low_pass_action_filter(self, actions):
-        actons_filtered = self.last_actions * 0.2 + actions * 0.8
+        # FIXED: Match sim2sim_tinker.py (flt=0.1) → 0.1 * last + 0.9 * curr
+        actons_filtered = self.last_actions * 0.1 + actions * 0.9
         return actons_filtered
     
     def _compute_torques(self, actions):
@@ -1826,21 +1827,15 @@ class LeggedRobot(BaseTask):
     
     def _reward_orientation_eular(self):
         """
-        Calculates the reward for maintaining a flat base orientation. It penalizes deviation 
-        from the desired base orientation using the base euler angles and the projected gravity vector.
-        
-        MODIFIED: Reduce reward during standing to avoid "stepping to improve orientation" exploit.
+        Calculates the reward for maintaining a flat base orientation.
+        Uses euler angles and projected gravity.
         """
         quat_mismatch = torch.exp(-torch.sum(torch.abs(self.base_euler_xyz[:, :2]), dim=1) * 10)
         orientation = torch.exp(-torch.norm(self.projected_gravity[:, :2], dim=1) * 20)
         
-        # Check if commanded to stand still
-        is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
-        
-        # Reduce orientation reward during standing (10x reduction)
-        # This prevents robot from stepping to fine-tune orientation when commanded to stand
+        # NOTE: Removed the 0.05x reduction during standing - this was counterproductive
+        # for pure standing training where we need full orientation reward.
         reward = quat_mismatch
-        reward = torch.where(is_static, reward * 0.05, reward)  # 20x reduction when standing
         
         return reward
 
@@ -1938,11 +1933,9 @@ class LeggedRobot(BaseTask):
         #print(base_height[0],self.cfg.rewards.base_height_target)
         #return torch.square(base_height - self.cfg.rewards.base_height_target)
         
-        # MODIFIED: Conditioned reward to prevent stepping for height adjustment
+        # NOTE: Removed the 0.1x reduction during standing - this was counterproductive
+        # for pure standing training where we need height reward.
         reward = torch.exp(-torch.abs(base_height - self.cfg.rewards.base_height_target) * 100)
-        
-        is_static = torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead
-        reward = torch.where(is_static, reward * 0.1, reward)  # 10x reduction when standing
         
         return reward
     

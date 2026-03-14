@@ -107,10 +107,10 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         global_reference = False
 
         class ranges:
-            # PHASE 2: Mixed Walking (40%) + Standing (60%) Training
-            lin_vel_x = [-0.5, 0.5]  # min max [m/s]
-            lin_vel_y = [-0.5, 0.5]  # min max [m/s]
-            ang_vel_yaw = [-1.5, 1.5]  # min max [rad/s]
+            # Setting to 0 for pure standing training
+            lin_vel_x = [0.0, 0.0]  # min max [m/s]
+            lin_vel_y = [0.0, 0.0]  # min max [m/s]
+            ang_vel_yaw = [0.0, 0.0]  # min max [rad/s]
             
             # Note: 60% of envs will have stop_flag=0 (zero velocity commands)
             # 40% will use these ranges (walking commands)
@@ -162,30 +162,31 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             tracking_lin_vel = 2.5
             tracking_ang_vel = 2.0
             base_acc = 0.02
-            lin_vel_z = -2.0
+            lin_vel_z = 0.0
             ang_vel_xy = -0.05
-            base_height = 0.2
+            base_height = 1.0        # Increased height reward
             
             collision = 0.0
             feet_stumble = 0.0
             # action_rate = -0.01
             # action_smoothness=-0.01
             # energy
-            powers = -2e-5
-            action_smoothness = -0.01
-            torques = -1e-5
+            powers = -5e-6           # Reduced penalty for more active movement
+            action_smoothness = -0.005 # Reduced penalty for more active movement
+            torques = -5e-6          # Reduced penalty for more active movement
             dof_vel = -2e-3  # Increased for quiet standing (was -5e-4)
             dof_acc = -2e-7
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
             torque_limits = -0.1
-
+            
             # ADJUSTED penalties for standing still
             stand_still = -1.5              # Static penalty
             stand_still_force = -1.0         # Force penalty
-            stand_still_step_punish = -15.0  # Step penalty (HEAVILY INCREASED - was -5.0)
+            stand_still_step_punish = -1.0    # DISABLED: allow stepping for balance recovery
             base_stability = -2.0            # Stability penalty
+            orientation_eular = 15.0         # Increased to keep torso level (was 5.0)
 
             feet_air_time = 3
             foot_clearance= -3
@@ -213,13 +214,13 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         randomize_restitution = True
         restitution_range = [0.0,1.0]
         randomize_base_mass = True
-        added_mass_range = [-0.5, 0.5]
+        added_mass_range = [-1.5, 1.5] # Increased mass range
         randomize_base_com = True
-        added_com_range = [-0.05, 0.05]
+        added_com_range = [-0.07, 0.07] # Increased COM range
         push_robots = True
-        push_interval_s = 6.0        # Less frequent for standing training (every 6s)
-        max_push_vel_xy = 0.2      # Mild linear pushes for standing balance
-        max_push_ang_vel = 0.2     # Mild angular disturbances
+        push_interval_s = 4.0             # Push more frequently for robust balance
+        max_push_vel_xy = 1.3           # Stronger push force (phase 2 training)
+        max_push_ang_vel = 0.8          # Angular disturbance (phase 2)
         # dynamic randomization
         # action_delay = 0.5
         action_noise = 0.015
@@ -245,7 +246,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         inertia_range = [0.9, 1.1]
 
         randomize_motor_offset = True
-        motor_offset_range = [-0.045, 0.045] # Offset to add to the motor angles
+        motor_offset_range = [-0.1, 0.1] # Increased offset range (approx ±5.7 deg)
         
         # add_lag = True #action lag
         # randomize_lag_timesteps = True
@@ -381,7 +382,7 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         imi_flag = False
       
     class runner( LeggedRobotCfgPPO.runner ):
-        run_name = 'test_barlowtwins'
+        run_name = 'test_barlowtwins_phase2'
         experiment_name = 'rough_go2_constraint'
         policy_class_name = 'ActorCriticMixedBarlowTwins'
         runner_class_name = 'OnConstraintPolicyRunner'
@@ -390,4 +391,4 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
         resume = True
-        resume_path = '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/modelt.pt'
+        resume_path = '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/logs/rough_go2_constraint/Mar13_18-21-31_test_barlowtwins/model_16000.pt'

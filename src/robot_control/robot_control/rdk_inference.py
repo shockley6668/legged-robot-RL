@@ -35,12 +35,6 @@ class TinkerRealInference:
             0.0, -0.08, -0.56, 1.12, 0.57   # 右腿: Yaw, Roll, Pitch, Knee, Ankle
         ], dtype=np.float32)
         
-        # 默认站立姿态 (更稳)
-        self.default_dof_pos_st = np.array([
-            0.0, 0.07, 0.56, -1.12, -0.57,  # 左腿: Yaw, Roll, Pitch, Knee, Ankle
-            0.0, -0.12, -0.56, 1.12, 0.57   # 右腿: Yaw, Roll, Pitch, Knee, Ankle
-        ], dtype=np.float32)
-        
         # 5. 状态缓存
         self.hist_obs = deque(maxlen=self.history_len)
         self.last_action = np.zeros(10, dtype=np.float32)
@@ -114,38 +108,22 @@ class TinkerRealInference:
         ort_inputs = {self.session.get_inputs()[0].name: policy_input}
         action = self.session.run(None, ort_inputs)[0][0] 
         
-        # D. 动作后处理 (非常重要！)
+        # D. 动作后处理
         # 1. 裁剪动作范围
-        action = np.clip(action, -1.2, 1.2) # 对应训练时的 clip_actions
+        action = np.clip(action, -1.2, 1.2)
         
-        # 2. 低通滤波 (flt=0.1 -> alpha=0.9 ?)
-        # 注意: sim2sim_tinker.py 中 filter 是: actons_filtered = last_actions * 0.1 + actions * (1-0.9) ???
-        # sim2sim code: flt=0.1; actons_filtered = last_actions * flt + actions * (1-flt) => 0.1 * last + 0.9 * curr
-        # 让我们保持一致:
+        # 2. 低通滤波 (必须与 sim2sim_tinker.py 的 FIR 逻辑完全一致)
+        # sim2sim: action_flt = last_actions * 0.1 + action * 0.9
         flt = 0.1
-        self.action_flt = self.action_flt * flt + action * (1-flt)
+        action_filtered = self.last_action * flt + action * (1 - flt)
         
         # E. 更新状态机
-        self.hist_obs.append(obs) # 将当前帧加入历史
-        self.last_action = action # 缓存模型输出的归一化 action (未滤波)
+        self.hist_obs.append(obs)     # 将当前帧加入历史
+        self.last_action = action.copy()     # 缓存模型原始输出，供下一帧滤波器使用
         
         # F. 映射到物理量
-        # --- Elegant Stop Logic ---
-        velocity_magnitude = np.sqrt(cmd_vx**2 + cmd_vy**2) # 通常只看线速度，或加上角速度权重
-        scale_factor = np.clip(velocity_magnitude / 0.5, 0.0, 1.0)
-        
-        # 1. Gate actions (停止时动作归零)
-        gated_action = self.action_flt * scale_factor
-        
-        # 2. Interpolate Bias (Standing <-> Walking)
-        bias = self.default_dof_pos_st * (1.0 - scale_factor) + self.default_dof_pos * scale_factor
-        
-        # 策略输出的是基于 default_dof_pos 的偏移量 ?? 
-        # 注意：训练时 obs 使用的是 default_dof_pos，但这里计算 target_q 时，
-        # 如果我们改变了 bias，是否需要改变 obs 的参考？
-        # 通常不需要，因为 obs 反映的是相对状态。
-        # 这里的 target_q = scaled_action + bias
-        target_q = gated_action * self.action_scale + bias
+        # 这里的 action_filtered 才是送往电机的
+        target_q = action_filtered * self.action_scale + self.default_dof_pos
         
         # G. 硬限位保护
         target_q = np.clip(target_q, self.joint_limits_low, self.joint_limits_high)
@@ -155,7 +133,7 @@ class TinkerRealInference:
 # --- 独立运行测试/参考 ---
 if __name__ == "__main__":
     # 配置模型路径
-    MODEL_FILE = "./modelt_teacher.onnx"
+    MODEL_FILE = "/root/legged-robot/src/robot_control/robot_control/modelt_0201.onnx"
     
     try:
         runner = TinkerRealInference(MODEL_FILE)

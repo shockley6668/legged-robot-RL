@@ -13,9 +13,9 @@ class InferenceNode(Node):
         super().__init__('inference_node')
 
         # Parameters
-        self.declare_parameter('model_path', '/root/legged-robot/src/robot_control/robot_control/modelt_teacher.onnx')
+        self.declare_parameter('model_path', '/root/legged-robot/src/robot_control/robot_control/modelt_0201.onnx')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
-
+        print("model_path:", model_path)
         self.get_logger().info(f'Loading model from: {model_path}')
         
         try:

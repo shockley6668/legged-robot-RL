@@ -112,21 +112,38 @@ def play(args):
         **policy_cfg_dict
     )
  
-    model_dict = torch.load(os.path.join(ROOT_DIR, PLAY_DIR))#《---------------------调用的网络模型doghome
+    # Load model from arguments if provided
+    if args.checkpoint is not None or args.load_run is not None:
+        from utils.helpers import get_load_path
+        log_root = os.path.join(ROOT_DIR, 'logs', train_cfg.runner.experiment_name)
+        try:
+            if isinstance(args.checkpoint, str) and (args.checkpoint.endswith('.pt') or '/' in args.checkpoint):
+                model_path = args.checkpoint
+                if not os.path.isabs(model_path):
+                    model_path = os.path.join(ROOT_DIR, model_path)
+            else:
+                checkpoint_num = int(args.checkpoint) if args.checkpoint is not None else -1
+                model_path = get_load_path(log_root, load_run=args.load_run, checkpoint=checkpoint_num)
+            
+            print(f"Loading model from argument: {model_path}")
+            model_dict = torch.load(model_path, map_location=env.device)
+        except Exception as e:
+            print(f"Failed to load from args: {e}. Falling back to default.")
+            model_dict = torch.load(os.path.join(ROOT_DIR, PLAY_DIR), map_location=env.device)
+    else:
+        print(f"Loading model from PLAY_DIR: {PLAY_DIR}")
+        model_dict = torch.load(os.path.join(ROOT_DIR, PLAY_DIR), map_location=env.device)
 
-    #if 1:#full 
     if isinstance(model_dict, dict) and 'model_state_dict' in model_dict:
         policy.load_state_dict(model_dict['model_state_dict'])
+    elif isinstance(model_dict, dict):
+        policy.load_state_dict(model_dict)
     else:
-        # model_dict is the full model object, extract its state_dict
         policy.load_state_dict(model_dict.state_dict())
-    policy.half()
+    # policy.half()
     policy = policy.to(env.device)
-    torch.save(policy,'modelt_test1931.pt',)
-    print('*****************')
-    print('Model converted and saved to modelt.pt. Exiting...')
-    import sys
-    sys.exit(0)
+    policy.eval()
+    print('Model loaded successfully.')
     print(policy)
     #else:#origin
     # policy.load_state_dict(model_dict['model_state_dict'])
@@ -206,7 +223,7 @@ def play(args):
           env.commands[:,1] = 0
           env.commands[:,2] = 0
           env.commands[:,3] = 0         
-        actions = policy.act_teacher(obs.half())#  
+        actions = policy.act_teacher(obs.float())#  
         #print(actions)
         if 0:#debug
             actions[0,0]=0#FL
@@ -262,7 +279,7 @@ def play(args):
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]) as prof:
          for i in range(1000):
             with torch.no_grad():
-              actions = policy.act_teacher(obs.half())
+              actions = policy.act_teacher(obs.float())
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
 if __name__ == '__main__':

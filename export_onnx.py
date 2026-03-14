@@ -6,7 +6,8 @@ import sys
 # Add current directory to path so configs and modules can be found
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-from configs.tinker_constraint_him_trot import TinkerConstraintHimRoughCfg
+from configs.tinker_constraint_him_trot import TinkerConstraintHimRoughCfg, TinkerConstraintHimRoughCfgPPO
+from modules.actor_critic import ActorCriticMixedBarlowTwins
 
 class PolicyWrapper(nn.Module):
     def __init__(self, policy):
@@ -26,7 +27,41 @@ def export_model(model_path, onnx_path):
     
     print(f"Loading model from {model_path}...")
     # Load the model. Using map_location='cpu' for export.
-    policy = torch.load(model_path, map_location='cpu')
+    loaded_obj = torch.load(model_path, map_location='cpu')
+    
+    if isinstance(loaded_obj, dict) and 'model_state_dict' in loaded_obj:
+        print(f"Detected checkpoint dictionary. Instantiating model...")
+        ppo_cfg = TinkerConstraintHimRoughCfgPPO()
+        policy_kwargs = {attr: getattr(ppo_cfg.policy, attr) for attr in dir(ppo_cfg.policy) if not attr.startswith('__')}
+        
+        policy = ActorCriticMixedBarlowTwins(
+            cfg.env.n_proprio,
+            cfg.env.n_scan,
+            cfg.env.num_observations,
+            cfg.env.n_priv_latent,
+            cfg.env.history_len,
+            cfg.env.num_actions,
+            **policy_kwargs
+        )
+        policy.load_state_dict(loaded_obj['model_state_dict'])
+    elif isinstance(loaded_obj, dict):
+        print(f"Detected dictionary (no model_state_dict). Attempting state_dict load...")
+        ppo_cfg = TinkerConstraintHimRoughCfgPPO()
+        policy_kwargs = {attr: getattr(ppo_cfg.policy, attr) for attr in dir(ppo_cfg.policy) if not attr.startswith('__')}
+        
+        policy = ActorCriticMixedBarlowTwins(
+            cfg.env.n_proprio,
+            cfg.env.n_scan,
+            cfg.env.num_observations,
+            cfg.env.n_priv_latent,
+            cfg.env.history_len,
+            cfg.env.num_actions,
+            **policy_kwargs
+        )
+        policy.load_state_dict(loaded_obj)
+    else:
+        policy = loaded_obj
+        
     policy.eval()
     policy.float()
     

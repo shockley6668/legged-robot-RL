@@ -15,9 +15,10 @@ from tqdm import tqdm
 from collections import deque
 from scipy.spatial.transform import Rotation as R
 from global_config import ROOT_DIR,SPD_X,SPD_Y,SPD_YAW
-from configs.back.tinker_constraint_him import TinkerConstraintHimRoughCfg
+from configs.tinker_constraint_him_trot import TinkerConstraintHimRoughCfg, TinkerConstraintHimRoughCfgPPO
 import torch
 import time
+from modules.actor_critic import ActorCriticMixedBarlowTwins
 import onnxruntime as ort
 #default_dof_pos=[-0.16,0.68,1.3 ,0.16,0.68,1.3, -0.16,0.68,1.3, 0.16,0.68,1.3]#默认角度需要与isacc一致
 # Unified default pose - matches default_joint_angles in config (used for both standing and walking)
@@ -232,6 +233,16 @@ def run_mujoco(policy, cfg):
                                         target_dq, dq, cfg.robot_config.kds)  # Calc torques
                         tau = np.clip(tau, -cfg.robot_config.tau_limit, cfg.robot_config.tau_limit)  # Clamp torques
                         data.ctrl = tau
+                    # Apply random push (disturbance) every 3 seconds
+                    push_interval = 3.0 # seconds
+                    push_steps = int(push_interval / cfg.sim_config.dt)
+                    if count_lowlevel % push_steps == 0 and count_lowlevel > 0:
+                        push_intensity = 1.0 # m/s
+                        # Apply random push to base velocity (qvel[0:3])
+                        push_vel = (np.random.rand(3) - 0.5) * 2 * push_intensity
+                        data.qvel[:3] += push_vel
+                        print(f"Applied random push: {push_vel}")
+
                     mujoco.mj_step(model,data)
                 viewer.sync()
                 count_lowlevel += 1
@@ -395,9 +406,47 @@ if __name__ == '__main__':
         policy = ort.InferenceSession(args.load_model)
         print(f"Loaded ONNX model from {args.load_model}")
     else:
-        policy = torch.load(args.load_model)# 有一个可能得原因是这个 pt文件里只有权重，而没有网络结构。 所以 只能用 torch.load去加载，不能用torch.jit.load
-        # Convert to float32 on CPU (float16/half not supported for ELU activation on CPU)
-        policy = policy.float()
-        print(f"Loaded PyTorch model from {args.load_model}")
+        loaded_obj = torch.load(args.load_model, map_location='cpu')
+        if isinstance(loaded_obj, dict) and 'model_state_dict' in loaded_obj:
+            print(f"Detected checkpoint dictionary. Instantiating model and loading state_dict...")
+            cfg_inst = Sim2simCfg()
+            ppo_cfg = TinkerConstraintHimRoughCfgPPO()
+            
+            # Extract policy class attributes manually to ensure all fields like priv_encoder_dims are present
+            policy_kwargs = {attr: getattr(ppo_cfg.policy, attr) for attr in dir(ppo_cfg.policy) if not attr.startswith('__')}
+            
+            policy = ActorCriticMixedBarlowTwins(
+                cfg_inst.env.n_proprio,
+                cfg_inst.env.n_scan,
+                cfg_inst.env.num_observations,
+                cfg_inst.env.n_priv_latent,
+                cfg_inst.env.history_len,
+                cfg_inst.env.num_actions,
+                **policy_kwargs
+            )
+            policy.load_state_dict(loaded_obj['model_state_dict'])
+            policy = policy.float()
+            print(f"Loaded state_dict from {args.load_model}")
+        elif isinstance(loaded_obj, dict):
+            print(f"Detected dictionary (no model_state_dict key). Attempting direct state_dict load...")
+            cfg_inst = Sim2simCfg()
+            ppo_cfg = TinkerConstraintHimRoughCfgPPO()
+            policy_kwargs = {attr: getattr(ppo_cfg.policy, attr) for attr in dir(ppo_cfg.policy) if not attr.startswith('__')}
+            
+            policy = ActorCriticMixedBarlowTwins(
+                cfg_inst.env.n_proprio,
+                cfg_inst.env.n_scan,
+                cfg_inst.env.num_observations,
+                cfg_inst.env.n_priv_latent,
+                cfg_inst.env.history_len,
+                cfg_inst.env.num_actions,
+                **policy_kwargs
+            )
+            policy.load_state_dict(loaded_obj)
+            policy = policy.float()
+        else:
+            # Complete model object
+            policy = loaded_obj.float()
+            print(f"Loaded complete model object from {args.load_model}")
    
     run_mujoco(policy, Sim2simCfg())

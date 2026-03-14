@@ -15,7 +15,7 @@ SPD_YAW = 0
 
 
 #train param
-MAX_ITER = 30000
+MAX_ITER = 16000
 SAVE_DIV = 500
 
 
