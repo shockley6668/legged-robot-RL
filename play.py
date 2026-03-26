@@ -49,7 +49,7 @@ def delete_files_in_directory(directory_path):
 def rand_commands(command_ranges,commands):
     # commands[0] = random.uniform(command_ranges.lin_vel_x[0], command_ranges.lin_vel_x[1])
     # commands[1] = random.uniform(command_ranges.lin_vel_y[0], command_ranges.lin_vel_y[1])
-    commands[0] = 0.0
+    commands[0] = 0.5
     commands[1] = 0.0
     commands[2] = 0
     # if self.cfg.commands.heading_command:
@@ -78,7 +78,7 @@ def play(args):
     env_cfg.terrain.curriculum = False
     env_cfg.noise.add_noise = False
     #env_cfg.terrain.mesh_type = 'plane'
-    env_cfg.domain_rand.push_robots = True
+    env_cfg.domain_rand.push_robots = False
     #env_cfg.domain_rand.randomize_friction = False
     env_cfg.domain_rand.randomize_base_com = False
     env_cfg.domain_rand.randomize_base_mass = False

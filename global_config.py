@@ -7,7 +7,7 @@ ROBOT_SEL = 'Tinker'
 #Trot Stand
 GAIT_SEL = 'Trot'
 # PLAY_DIR = os.path.join(ROOT_DIR, 'modelt_test.pt')
-PLAY_DIR = "/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/logs/rough_go2_constraint/Feb02_20-27-21_test_barlowtwins/model_26000.pt"
+PLAY_DIR = "/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar18_14-00-48_test_barlowtwins_phase2/model_1000.pt"
 #Sim2Sim Cmd
 SPD_X = 0.0
 SPD_Y = 0.0
@@ -15,8 +15,8 @@ SPD_YAW = 0
 
 
 #train param
-MAX_ITER = 16000
-SAVE_DIV = 500
+MAX_ITER = 20000
+SAVE_DIV = 1000
 
 
 #./compile XX.urdf XX.xml

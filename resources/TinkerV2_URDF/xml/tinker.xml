@@ -1,10 +1,15 @@
 <mujocoinclude>
     <body name="tinker" pos="0 0 -0.14" quat="1 0 0 0">
         <joint name="float_base" type="free"/>
-        <inertial pos="0.00 0 0.036" quat="1 0 0 0" mass="3" diaginertia="0.02538 0.03617 0.01306"/>  
+        <inertial pos="0.00 0 0.02" quat="1 0 0 0" mass="2.5" diaginertia="0.02 0.03 0.01"/>  
         <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="base_link" />
         <geom type="mesh" rgba="1 1 1 1" mesh="base_link" />
         <site name='imu' size='0.01' pos='0.0 0 0.0'/>
+
+        <body name="battery_link" pos="-0.14 0 0.06">
+            <inertial pos="0 0 0" mass="0.7" diaginertia="0.0008 0.0007 0.0003"/>
+            <geom type="box" size="0.02 0.03 0.06" rgba="0 0 1 1"/>
+        </body>
 
         <body name="L0_Link" pos="-0.002787 0.053542 0.054381">
             <inertial pos="0.0006 0 -0.0529" mass="0.587331" diaginertia="0.0007 0.0004 0.0004" />

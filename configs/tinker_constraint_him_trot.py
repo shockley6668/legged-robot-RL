@@ -44,7 +44,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         en_logger = False #wanda
 
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.33] # x,y,z [m] - Lowered for better landing stability
+        pos = [0.0, 0.0, 0.38] # x,y,z [m] - 提高初始高度，防止因为太低直接压垮劈叉
 
         default_joint_angles = { # = target angles [rad] when action = 0.0
             'J_L0':   0.0,   # [rad]
@@ -82,8 +82,9 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         control_type = 'P'
         # stiffness = {'joint': 10.0}  # [N*m/rad]
         # damping = {'joint': 0.4}     # [N*m*s/rad]
-        stiffness = {'J_L0': 13, 'J_L1': 15,'J_L2': 15, 'J_L3':15, 'J_L4_ankle':13,
-                     'J_R0': 13, 'J_R1': 15,'J_R2': 15, 'J_R3':15, 'J_R4_ankle':13}
+        # 恢复接近实机的较软刚度，依靠RL的Reward强化约束它站立
+        stiffness = {'J_L0': 15, 'J_L1': 15,'J_L2': 15, 'J_L3':15, 'J_L4_ankle':13,
+                     'J_R0': 15, 'J_R1': 15,'J_R2': 15, 'J_R3':15, 'J_R4_ankle':13}
         damping = {'J_L0': 0.3, 'J_L1': 0.65,'J_L2': 0.65, 'J_L3':0.65, 'J_L4_ankle':0.3,
                    'J_R0': 0.3, 'J_R1': 0.65,'J_R2': 0.65, 'J_R3':0.65, 'J_R4_ankle':0.3}
 
@@ -108,9 +109,9 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
 
         class ranges:
             # Setting to 0 for pure standing training
-            lin_vel_x = [0.0, 0.0]  # min max [m/s]
-            lin_vel_y = [0.0, 0.0]  # min max [m/s]
-            ang_vel_yaw = [0.0, 0.0]  # min max [rad/s]
+            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
+            lin_vel_y = [-0.5, 0.5]  # 降低侧向平移范围，防止为了走大速度而劈叉
+            ang_vel_yaw = [-0.8, 0.8]  # 之前是 [0.5, 0.5] 导致机器人根本没学过直行和左转的区别
             
             # Note: 60% of envs will have stop_flag=0 (zero velocity commands)
             # 40% will use these ranges (walking commands)
@@ -146,65 +147,70 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
   
     class rewards( LeggedRobotCfg.rewards ):
         soft_dof_pos_limit = 0.9
-        base_height_target = 0.30
-        clearance_height_target = -0.21#相对站立高度 不能和高度差距太大
-        tracking_sigma = 0.5 #0.25 小了探索出来爬行 300  0.15 小惯量  0.25 大惯量
+        base_height_target = 0.29 # 【恢复0.29】：机器人的默认站立真实高度其实是0.29，强行要求0.33太高了，会导致它站不住、蹲下甚至倒下。
+        clearance_height_target = -0.25 # 【修改目标离地间隙】：之前-0.21要求相对于重心抬升高达12cm，现改为-0.25(抬升8cm左右)，降动作幅度
+        tracking_sigma = 0.1 # 【调低】：减少容忍度，增加对指令匹配的严格性（原本0.5偏软）
 
-        cycle_time=0.5 #s 
-        touch_thr= 6 #N
+        cycle_time=0.6 #s 默认步态周期
+        # cycle_time_range = [0.4, 0.8] # 动态步态周期范围，快走0.4s，慢走或静止0.8s
+        touch_thr= 4 #N
         command_dead = 0.05  # INCREASED from 0.01 to 0.05 - larger dead zone for better zero-velocity control
-        stop_rate = 0.5  # ENHANCED: Increased from 0.5 (50% zero-velocity training for better standing)
+        stop_rate = 0.7  # ENHANCED: Increased from 0.5 (50% zero-velocity training for better standing)
         target_joint_pos_scale = 0.17    # rad
         
-        max_contact_force = 120 #N
+        max_contact_force = 60 #N 进一步压低落足力量上限，严查“踏板太用力”的重落地现象
         class scales( LeggedRobotCfg.rewards.scales ):
             termination = -20.0
-            tracking_lin_vel = 2.5
-            tracking_ang_vel = 2.0
+            tracking_lin_vel = 10.0     # 【极大下调】：取消为了治劈叉加上的8.0高跟随奖励。超高跟随奖励会导致机器人“非常急切”，动作暴躁
+            tracking_ang_vel = 8.0     # 【极大下调】：旋转跟随奖励也改低，避免它过度响应指令而剧烈抖动
             base_acc = 0.02
             lin_vel_z = 0.0
             ang_vel_xy = -0.05
-            base_height = 1.0        # Increased height reward
+            base_height = 2.0        # 增加机器人的高度奖励权重，逼迫其站起来
             
             collision = 0.0
             feet_stumble = 0.0
-            # action_rate = -0.01
+            action_rate = -0.4   # 【加重惩罚】：压制高频的动作输出，避免“急切”、“剧烈”的多余抽搐
             # action_smoothness=-0.01
             # energy
             powers = -5e-6           # Reduced penalty for more active movement
-            action_smoothness = -0.005 # Reduced penalty for more active movement
-            torques = -5e-6          # Reduced penalty for more active movement
-            dof_vel = -2e-3  # Increased for quiet standing (was -5e-4)
-            dof_acc = -2e-7
+            action_smoothness = -1.0 # 【加重惩罚】：强制动作平滑，阻止每次踏脚都“太用力、太猛”
+            torques = -8e-6          # 不要惩罚太大，否则机器人会为了省力矩而无法支撑体重（导致下蹲劈叉）
+            dof_vel = -5e-3          # 【加重惩罚】：之前偏小，导致电机依然可以瞬间输出很高的速度，加重惩罚压制“猛踏”
+            dof_acc = -5e-7          # 【加重惩罚】：通过压榨加速度，使得整体腿部摆动变得“柔婉”，治本“太剧烈”的问题
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
             torque_limits = -0.1
             
             # ADJUSTED penalties for standing still
-            stand_still = -1.5              # Static penalty
-            stand_still_force = -1.0         # Force penalty
-            stand_still_step_punish = -1.0    # DISABLED: allow stepping for balance recovery
+            stand_still = -2.0              # 【增强惩罚】极大幅度惩罚原地静止时关节偏离默认位置的行为，强行杜绝“劈叉”，最关键的是它不会影响vy移动！
+            stand_still_force = 0.3         # Force penalty
+            stand_still_step_punish = -1.0   # 必须是负数！静止时绝对不许踏步 (符合你的要求)
             base_stability = -2.0            # Stability penalty
-            orientation_eular = 15.0         # Increased to keep torso level (was 5.0)
-
-            feet_air_time = 3
-            foot_clearance= -3
-            stumble= -0.02
             
-            no_jump = 0.7
-            orientation_eular= 5.0 # 0.05可以探索爬行
+            # --- 解决侧行卡死的关键 ---
+            # 机器人没有Ankle Roll横向踝关节，侧向跨步必然导致躯干短暂侧倾。由于侧向跟速收益有限(6分)，如果躯干倾斜惩罚过高(原先15.0或5.0)，网络宁可扣掉跟速分，也绝对不敢动！
+            orientation_eular= 2.5           # 【稍微调软平衡奖励】：允许一定程度的上半身微微侧倾，换取腿能够靠拢且依然能侧移。
+            
+            feet_air_time = 6.0             # 【适当降低】：降低滞空奖励的要求，让他不再急于把脚快速拔起滞空
+            foot_clearance = -4.5 # 【极大降低抬脚惩罚】：即使几乎擦着地走也不重罚，以此换取极其轻柔的步态，避免为了躲惩罚而猛抽腿
+            foot_clearance_positive = 5.0  # 【大幅削弱高抬脚奖励】：从15直降到5，彻底打消它“抽搐式高抬腿以赚取巨额积分”的急切行为
+            stumble= -0.05
+            
+            no_jump = 1.7
  
-            hip_pos= -1
+            # --- 解决静止时劈叉问题的关键 ---
+            hip_pos= -25.0                    # 【加重】极大提升整体侧展惩罚，强行逼它把脚收回去。逼迫其放弃微小劈叉求稳的局部最优解。
             #feet_rotation = 1e-1
             feet_rotation1 = 0.3
             feet_rotation2 = 0.3
             #ankle_pos = 1e-5
             
-            feet_contact_forces = -0.01
+            feet_contact_forces = -0.5    # 【加重惩罚】：大力压制重踩地面，逼迫它学会减震和轻微吸腿落地
             #vel_mismatch_exp = 0.3  # lin_z; ang x,y  速度奖励大可以鼓励机器人更多移动，与摆腿耦合
             low_speed = 0.2 
-            track_vel_hard = 0.5
+            track_vel_hard = 6.0
             foot_slip = -0.05
 
 
@@ -216,11 +222,11 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         randomize_base_mass = True
         added_mass_range = [-1.5, 1.5] # Increased mass range
         randomize_base_com = True
-        added_com_range = [-0.07, 0.07] # Increased COM range
+        added_com_range = [-0.03, 0.03] # Increased COM range
         push_robots = True
         push_interval_s = 4.0             # Push more frequently for robust balance
-        max_push_vel_xy = 1.3           # Stronger push force (phase 2 training)
-        max_push_ang_vel = 0.8          # Angular disturbance (phase 2)
+        max_push_vel_xy = 0.5         # Stronger push force (phase 2 training)
+        max_push_ang_vel = 0.5          # Angular disturbance (phase 2)
         # dynamic randomization
         # action_delay = 0.5
         action_noise = 0.015
@@ -304,7 +310,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.1
             #collision = 0.1
             #stand_still = 0.1 #站立默认位置
-            hip_pos = 0.1 #侧展
+            hip_pos = 1.5 # 【大幅加重】：拉格朗日Cost的惩罚系数，原0.1太软。这个直接决定了模型对“劈叉”这个违规动作的敏感度
             #base_height = 0.1
             #foot_regular = 0.1
             #trot_contact = 0.1
@@ -317,7 +323,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.0
             #collision = 0.0
             #stand_still = 0.0
-            hip_pos = 0.0
+            hip_pos = 0.0 # 【收紧容忍度】：只容忍0.0的偏差，也就是说只要劈叉超过0.0，Cost惩罚立刻启动。原0.1代表“容忍你往外撇一点点”。
             #base_height = 0.0
             #foot_regular = 0.0
             #trot_contact = 1
@@ -391,4 +397,4 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
         resume = True
-        resume_path = '/home/fsr/Downloads/OmniBotSeries-Tinker/OmniBotCtrl/OmniBotCtrl/logs/rough_go2_constraint/Mar13_18-21-31_test_barlowtwins/model_16000.pt'
+        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar24_15-27-00_test_barlowtwins_phase2/model_1000.pt'

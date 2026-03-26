@@ -1,0 +1,8 @@
+1. Update configs/tinker_constraint_him_trot.py to change cycle_time to cycle_time_range
+2. Update envs/legged_robot.py:
+    - Add self.gait_phase and self.current_cycle_time in _init_buffers
+    - Reset them in reset_idx
+    - Calculate current_cycle_time based on command norm in post_physics_step
+    - Increment gait_phase by self.dt / (current_cycle_time * 2) in post_physics_step
+    - Update _get_phase to return self.gait_phase
+    - Map self.cfg.rewards.cycle_time to self.current_cycle_time in relevant reward functions

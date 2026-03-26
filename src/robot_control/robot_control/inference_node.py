@@ -13,7 +13,7 @@ class InferenceNode(Node):
         super().__init__('inference_node')
 
         # Parameters
-        self.declare_parameter('model_path', '/root/legged-robot/src/robot_control/robot_control/modelt_0201.onnx')
+        self.declare_parameter('model_path', '/root/legged-robot/src/robot_control/robot_control/model_1500.onnx')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
         print("model_path:", model_path)
         self.get_logger().info(f'Loading model from: {model_path}')
@@ -45,7 +45,7 @@ class InferenceNode(Node):
         # Publisher
         self.motor_cmd_pub = self.create_publisher(Float64MultiArray, 'motor_cmds', 10)
 
-        # Timer for inference loop (e.g. 50Hz)
+        # Timer for inference loop (50Hz)
         self.dt = 0.02
         self.timer = self.create_timer(self.dt, self.timer_callback)
         

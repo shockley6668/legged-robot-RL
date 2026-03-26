@@ -4,7 +4,7 @@ from collections import deque
 import time
 
 class TinkerRealInference:
-    def __init__(self, model_path):
+    def __init__(self, model_path, clip_actions=100.0):
         """
         初始化 RDK 推理类
         :param model_path: ONNX 模型路径
@@ -29,6 +29,7 @@ class TinkerRealInference:
         
         # 4. 机器人控制参数
         self.action_scale = 0.25
+        self.clip_actions = float(clip_actions)
         # 默认关节角度 (与 sim2sim_tinker.py 一致)
         self.default_dof_pos = np.array([
             0.0, 0.08, 0.56, -1.12, -0.57,  # 左腿: Yaw, Roll, Pitch, Knee, Ankle
@@ -80,6 +81,9 @@ class TinkerRealInference:
         # A. 构建当前时刻的本体感受观测 (39维)
         obs = np.zeros(self.n_proprio, dtype=np.float32)
         
+        # 欧拉角防越界保护 (限制在 -pi 到 pi, 防止 Yaw 连续旋转后数值暴出模型认知范围)
+        euler = (euler + np.pi) % (2 * np.pi) - np.pi
+        
         # [0:3] 角速度缩放
         obs[0:3] = imu_gyro * self.obs_scales_ang_vel
         # [3:6] 欧拉角缩放
@@ -101,7 +105,7 @@ class TinkerRealInference:
         policy_input[0, 0:39] = obs
         # 填充历史数据 (从 deque 中取出 10 帧)
         for i in range(self.history_len):
-            start_off = 39 + self.n_priv_latent + self.n_scan # 39 + 43 + 187 = 269
+            start_off = 39 + self.n_priv_latent + self.n_scan # 39 + 44 + 187 = 270
             policy_input[0, start_off + i*39 : start_off + (i+1)*39] = self.hist_obs[i]
             
         # C. ONNX 推理
@@ -110,7 +114,7 @@ class TinkerRealInference:
         
         # D. 动作后处理
         # 1. 裁剪动作范围
-        action = np.clip(action, -1.2, 1.2)
+        action = np.clip(action, -self.clip_actions, self.clip_actions)
         
         # 2. 低通滤波 (必须与 sim2sim_tinker.py 的 FIR 逻辑完全一致)
         # sim2sim: action_flt = last_actions * 0.1 + action * 0.9
@@ -133,7 +137,7 @@ class TinkerRealInference:
 # --- 独立运行测试/参考 ---
 if __name__ == "__main__":
     # 配置模型路径
-    MODEL_FILE = "/root/legged-robot/src/robot_control/robot_control/modelt_0201.onnx"
+    MODEL_FILE = "/root/legged-robot/src/robot_control/robot_control/model_1500.onnx"
     
     try:
         runner = TinkerRealInference(MODEL_FILE)

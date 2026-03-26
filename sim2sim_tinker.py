@@ -31,11 +31,34 @@ class cmd:
 
 paused = False
 
-def key_callback(key):
-    if key == 32:  # Space
+def key_callback(keycode):
+    if keycode == 32:  # Space
         global paused
         paused = not paused
         print(f"Simulation {'Paused' if paused else 'Resumed'}")
+    elif keycode == 87:  # W 键，增加前进速度 vx
+        cmd.vx = np.clip(cmd.vx + 0.1, -1.0, 1.0)
+        print(f"键盘控制 - 前行速度 (vx): {cmd.vx:.2f}")
+    elif keycode == 83:  # S 键，减少前进速度（后退）
+        cmd.vx = np.clip(cmd.vx - 0.1, -1.0, 1.0)
+        print(f"键盘控制 - 前行速度 (vx): {cmd.vx:.2f}")
+    elif keycode == 65:  # A 键，增加左向速度 vy
+        cmd.vy = np.clip(cmd.vy + 0.1, -0.5, 0.5)
+        print(f"键盘控制 - 侧移速度 (vy): {cmd.vy:.2f}")
+    elif keycode == 68:  # D 键，增加右向速度 vy
+        cmd.vy = np.clip(cmd.vy - 0.1, -0.5, 0.5)
+        print(f"键盘控制 - 侧移速度 (vy): {cmd.vy:.2f}")
+    elif keycode == 81:  # Q 键，左转位速率 dyaw
+        cmd.dyaw = np.clip(cmd.dyaw + 0.2, -0.8, 0.8)
+        print(f"键盘控制 - 转向速度 (dyaw): {cmd.dyaw:.2f}")
+    elif keycode == 69:  # E 键，右转位速率 dyaw
+        cmd.dyaw = np.clip(cmd.dyaw - 0.2, -0.8, 0.8)
+        print(f"键盘控制 - 转向速度 (dyaw): {cmd.dyaw:.2f}")
+    elif keycode == 82:  # R 键，重置指令为 0
+        cmd.vx = 0.0
+        cmd.vy = 0.0
+        cmd.dyaw = 0.0
+        print("键盘控制 - [指令已归零]")
 
 
 def quaternion_to_euler_array(quat):
@@ -138,11 +161,12 @@ def run_mujoco(policy, cfg):
                             eu_ang = quaternion_to_euler_array(quat)
                             eu_ang[eu_ang > math.pi] -= 2 * math.pi
 
-                            cmd.vx=0.0
-                            cmd.vy=0.0
-                            cmd.dyaw= 0.0
+                            # 速度指令现已通过键盘 key_callback 全局控制，由用户的 WASD 更改
+                            # cmd.vx=0.0
+                            # cmd.vy=0.4
+                            # cmd.dyaw= 0.0
                             #sensor->lcm
-                            #单次观测
+                            #单次观测zhge
                             obs[0, 0] = omega[0] *cfg.normalization.obs_scales.ang_vel
                             obs[0, 1] = omega[1] *cfg.normalization.obs_scales.ang_vel
                             obs[0, 2] = omega[2] *cfg.normalization.obs_scales.ang_vel
@@ -207,7 +231,7 @@ def run_mujoco(policy, cfg):
                             # print("action_flt:")
                             #print("action_flt:",action_flt)
                             #print("q:",q)
-                            print("target_q:",target_q)
+                            # print("target_q:",target_q)
 
                         target_dq = np.zeros((cfg.env.num_actions), dtype=np.double)
                         # Generate PD control
@@ -234,10 +258,10 @@ def run_mujoco(policy, cfg):
                         tau = np.clip(tau, -cfg.robot_config.tau_limit, cfg.robot_config.tau_limit)  # Clamp torques
                         data.ctrl = tau
                     # Apply random push (disturbance) every 3 seconds
-                    push_interval = 3.0 # seconds
+                    push_interval = 2 # seconds
                     push_steps = int(push_interval / cfg.sim_config.dt)
                     if count_lowlevel % push_steps == 0 and count_lowlevel > 0:
-                        push_intensity = 1.0 # m/s
+                        push_intensity = 0.0 # m/s
                         # Apply random push to base velocity (qvel[0:3])
                         push_vel = (np.random.rand(3) - 0.5) * 2 * push_intensity
                         data.qvel[:3] += push_vel
@@ -275,9 +299,10 @@ def run_mujoco(policy, cfg):
                     eu_ang = quaternion_to_euler_array(quat)
                     eu_ang[eu_ang > math.pi] -= 2 * math.pi
 
-                    cmd.vx=SPD_X
-                    cmd.vy=SPD_Y
-                    cmd.dyaw= SPD_YAW
+                    # 速度指令现已通过键盘 key_callback 全局控制，由用户的 WASD 更改
+                    # cmd.vx=0
+                    # cmd.vy=0
+                    # cmd.dyaw=0
                     #sensor->lcm
                     #单次观测
                     obs[0, 0] = omega[0] *cfg.normalization.obs_scales.ang_vel
