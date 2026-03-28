@@ -161,8 +161,8 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         max_contact_force = 60 #N 进一步压低落足力量上限，严查“踏板太用力”的重落地现象
         class scales( LeggedRobotCfg.rewards.scales ):
             termination = -20.0
-            tracking_lin_vel = 10.0     # 【极大下调】：取消为了治劈叉加上的8.0高跟随奖励。超高跟随奖励会导致机器人“非常急切”，动作暴躁
-            tracking_ang_vel = 8.0     # 【极大下调】：旋转跟随奖励也改低，避免它过度响应指令而剧烈抖动
+            tracking_lin_vel = 15.0     # 提高跟速奖励，对抗平滑惩罚，解决低速不走的问题
+            tracking_ang_vel = 10.0     # 适当提高以保证低速也能响应
             base_acc = 0.02
             lin_vel_z = 0.0
             ang_vel_xy = -0.05
@@ -170,47 +170,47 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             
             collision = 0.0
             feet_stumble = 0.0
-            action_rate = -0.4   # 【加重惩罚】：压制高频的动作输出，避免“急切”、“剧烈”的多余抽搐
+            action_rate = -0.8   # 【更加重惩罚】：压制高频的动作输出，进一步满足“动作更温和”的要求
             # action_smoothness=-0.01
             # energy
             powers = -5e-6           # Reduced penalty for more active movement
-            action_smoothness = -1.0 # 【加重惩罚】：强制动作平滑，阻止每次踏脚都“太用力、太猛”
+            action_smoothness = -2.0 # 【更加重惩罚】：强制动作极度平滑，温和移动
             torques = -8e-6          # 不要惩罚太大，否则机器人会为了省力矩而无法支撑体重（导致下蹲劈叉）
-            dof_vel = -5e-3          # 【加重惩罚】：之前偏小，导致电机依然可以瞬间输出很高的速度，加重惩罚压制“猛踏”
-            dof_acc = -5e-7          # 【加重惩罚】：通过压榨加速度，使得整体腿部摆动变得“柔婉”，治本“太剧烈”的问题
+            dof_vel = -1e-2          # 【加倍惩罚】：抑制瞬间高转速，确保踏脚轻柔
+            dof_acc = -2e-5          # 【加倍惩罚】：进一步压榨加速度，使得整体腿部摆动更加“柔婉”
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
             torque_limits = -0.1
             
             # ADJUSTED penalties for standing still
-            stand_still = -2.0              # 【增强惩罚】极大幅度惩罚原地静止时关节偏离默认位置的行为，强行杜绝“劈叉”，最关键的是它不会影响vy移动！
+            stand_still = -8.0              # 【更加重惩罚】彻底解决站立时脚1前1后和hip歪的问题，静止时必须完美复原默认姿态！
             stand_still_force = 0.3         # Force penalty
-            stand_still_step_punish = -1.0   # 必须是负数！静止时绝对不许踏步 (符合你的要求)
+            stand_still_step_punish = -3.0   # 严禁原地抽搐踏步
             base_stability = -2.0            # Stability penalty
             
             # --- 解决侧行卡死的关键 ---
             # 机器人没有Ankle Roll横向踝关节，侧向跨步必然导致躯干短暂侧倾。由于侧向跟速收益有限(6分)，如果躯干倾斜惩罚过高(原先15.0或5.0)，网络宁可扣掉跟速分，也绝对不敢动！
             orientation_eular= 2.5           # 【稍微调软平衡奖励】：允许一定程度的上半身微微侧倾，换取腿能够靠拢且依然能侧移。
             
-            feet_air_time = 6.0             # 【适当降低】：降低滞空奖励的要求，让他不再急于把脚快速拔起滞空
+            feet_air_time = 3.5             # 【大幅降低】：允许脚不明显滞空，能够走“细碎温柔”的低速步伐，解决低速不走的问题
             foot_clearance = -4.5 # 【极大降低抬脚惩罚】：即使几乎擦着地走也不重罚，以此换取极其轻柔的步态，避免为了躲惩罚而猛抽腿
-            foot_clearance_positive = 5.0  # 【大幅削弱高抬脚奖励】：从15直降到5，彻底打消它“抽搐式高抬腿以赚取巨额积分”的急切行为
+            foot_clearance_positive = 1.5  # 【极大幅削弱】：完全打消为了拿积分而猛高抬腿的欲望，换取温和低俗动作
             stumble= -0.05
             
             no_jump = 1.7
  
             # --- 解决静止时劈叉问题的关键 ---
-            hip_pos= -25.0                    # 【加重】极大提升整体侧展惩罚，强行逼它把脚收回去。逼迫其放弃微小劈叉求稳的局部最优解。
+            hip_pos= -35.0                    # 【再加重】解决hip还是有点歪的问题，严格约束hip回正。
             #feet_rotation = 1e-1
             feet_rotation1 = 0.3
             feet_rotation2 = 0.3
             #ankle_pos = 1e-5
             
-            feet_contact_forces = -0.5    # 【加重惩罚】：大力压制重踩地面，逼迫它学会减震和轻微吸腿落地
+            feet_contact_forces = -1.0    # 【再加倍惩罚】：严禁重踩地面，动作必须极其轻柔温和
             #vel_mismatch_exp = 0.3  # lin_z; ang x,y  速度奖励大可以鼓励机器人更多移动，与摆腿耦合
-            low_speed = 0.2 
-            track_vel_hard = 6.0
+            low_speed = 2.0               # 【大幅提高】：明确补贴小指令下的移动，直接解决低速不跟随、>0.5才动的问题
+            track_vel_hard = 8.0
             foot_slip = -0.05
 
 
@@ -310,7 +310,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.1
             #collision = 0.1
             #stand_still = 0.1 #站立默认位置
-            hip_pos = 1.5 # 【大幅加重】：拉格朗日Cost的惩罚系数，原0.1太软。这个直接决定了模型对“劈叉”这个违规动作的敏感度
+            hip_pos = 3.0 # 【大幅加重】：拉格朗日Cost的惩罚系数，原1.5。强化不歪的要求
             #base_height = 0.1
             #foot_regular = 0.1
             #trot_contact = 0.1
@@ -397,4 +397,4 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
         resume = True
-        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar24_15-27-00_test_barlowtwins_phase2/model_1000.pt'
+        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar26_11-00-51_test_barlowtwins_phase2/model_3000.pt'
