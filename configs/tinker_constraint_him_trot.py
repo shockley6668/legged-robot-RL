@@ -109,8 +109,8 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
 
         class ranges:
             # Setting to 0 for pure standing training
-            lin_vel_x = [-1.0, 1.0]  # min max [m/s]
-            lin_vel_y = [-0.5, 0.5]  # 降低侧向平移范围，防止为了走大速度而劈叉
+            lin_vel_x = [-0.8, 0.8]  # min max [m/s]
+            lin_vel_y = [-0.6, 0.6]  # 降低侧向平移范围，防止为了走大速度而劈叉
             ang_vel_yaw = [-0.8, 0.8]  # 之前是 [0.5, 0.5] 导致机器人根本没学过直行和左转的区别
             
             # Note: 60% of envs will have stop_flag=0 (zero velocity commands)
@@ -149,20 +149,20 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.29 # 【恢复0.29】：机器人的默认站立真实高度其实是0.29，强行要求0.33太高了，会导致它站不住、蹲下甚至倒下。
         clearance_height_target = -0.25 # 【修改目标离地间隙】：之前-0.21要求相对于重心抬升高达12cm，现改为-0.25(抬升8cm左右)，降动作幅度
-        tracking_sigma = 0.1 # 【调低】：减少容忍度，增加对指令匹配的严格性（原本0.5偏软）
+        tracking_sigma = 0.1 # 【恢复为正常范围0.1，官方默认0.25】：极端的0.001会导致网络因得不到正向梯度而放弃学习，直接摆烂。
 
-        cycle_time=0.6 #s 默认步态周期
-        # cycle_time_range = [0.4, 0.8] # 动态步态周期范围，快走0.4s，慢走或静止0.8s
-        touch_thr= 4 #N
+        cycle_time = 0.4 # 作为兜底参数
+        cycle_time_range = [0.45, 0.25] # 核心：低速时单腿挥动0.45s(全步态0.9s，走得慢且稳)，高速时单腿挥动0.25s(全步态0.5s，高频步态)
+        touch_thr = 10.0 #N 【修改】：约1kg承重。双足机器人走路时，脚底必须受力超过1kg才能认定为踏实地面，避免微小蹭地欺骗判定
         command_dead = 0.05  # INCREASED from 0.01 to 0.05 - larger dead zone for better zero-velocity control
         stop_rate = 0.7  # ENHANCED: Increased from 0.5 (50% zero-velocity training for better standing)
         target_joint_pos_scale = 0.17    # rad
         
-        max_contact_force = 60 #N 进一步压低落足力量上限，严查“踏板太用力”的重落地现象
+        max_contact_force = 140.0 #N 【大幅放宽】：机器人自重约9kg(单腿静止45N)，考虑迈步时的2-3倍动量冲击，承受150N是正常的，超150N才算砸地
         class scales( LeggedRobotCfg.rewards.scales ):
             termination = -20.0
-            tracking_lin_vel = 15.0     # 提高跟速奖励，对抗平滑惩罚，解决低速不走的问题
-            tracking_ang_vel = 10.0     # 适当提高以保证低速也能响应
+            tracking_lin_vel = 20.0     # 提高跟速奖励，对抗平滑惩罚，解决低速不走的问题
+            tracking_ang_vel = 20.0     # 适当提高以保证低速也能响应
             base_acc = 0.02
             lin_vel_z = 0.0
             ang_vel_xy = -0.05
@@ -170,14 +170,14 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             
             collision = 0.0
             feet_stumble = 0.0
-            action_rate = -0.8   # 【更加重惩罚】：压制高频的动作输出，进一步满足“动作更温和”的要求
+            action_rate = -0.6   # 【加重】：更加限制高频颤动现象，迫使动作更柔和
             # action_smoothness=-0.01
             # energy
             powers = -5e-6           # Reduced penalty for more active movement
-            action_smoothness = -2.0 # 【更加重惩罚】：强制动作极度平滑，温和移动
+            action_smoothness = -1.0 # 【恢复】：解除极端的动作平滑惩罚，以恢复低速踏步的动作意愿
             torques = -8e-6          # 不要惩罚太大，否则机器人会为了省力矩而无法支撑体重（导致下蹲劈叉）
-            dof_vel = -1e-2          # 【加倍惩罚】：抑制瞬间高转速，确保踏脚轻柔
-            dof_acc = -2e-5          # 【加倍惩罚】：进一步压榨加速度，使得整体腿部摆动更加“柔婉”
+            dof_vel = -0.005         # 【重新加重】：因为已经添加了死区(3.0rad/s)，超出部分一定是“爆转”，给予一定程度的惩罚
+            dof_acc = -5e-5          # 【重新加重】：因为已经添加了死区(60rad/s2)，超出部分是“爆冲”，给予惩罚
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
@@ -193,9 +193,9 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             # 机器人没有Ankle Roll横向踝关节，侧向跨步必然导致躯干短暂侧倾。由于侧向跟速收益有限(6分)，如果躯干倾斜惩罚过高(原先15.0或5.0)，网络宁可扣掉跟速分，也绝对不敢动！
             orientation_eular= 2.5           # 【稍微调软平衡奖励】：允许一定程度的上半身微微侧倾，换取腿能够靠拢且依然能侧移。
             
-            feet_air_time = 3.5             # 【大幅降低】：允许脚不明显滞空，能够走“细碎温柔”的低速步伐，解决低速不走的问题
-            foot_clearance = -4.5 # 【极大降低抬脚惩罚】：即使几乎擦着地走也不重罚，以此换取极其轻柔的步态，避免为了躲惩罚而猛抽腿
-            foot_clearance_positive = 1.5  # 【极大幅削弱】：完全打消为了拿积分而猛高抬腿的欲望，换取温和低俗动作
+            feet_air_time = 1.0             # 【大幅降低】：既然你想让它走得又轻又稳，就绝不能为了赚滞空分数而高抬腿硬踩。
+            foot_clearance = -2.0 # 【大幅降低】：允许相对贴地的步态
+            foot_clearance_positive = 1.0  # 完全不鼓励把腿抬太高
             stumble= -0.05
             
             no_jump = 1.7
@@ -207,7 +207,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             feet_rotation2 = 0.3
             #ankle_pos = 1e-5
             
-            feet_contact_forces = -1.0    # 【再加倍惩罚】：严禁重踩地面，动作必须极其轻柔温和
+            feet_contact_forces = -10.0    # 【大倍率惩罚】：最核心惩罚！如果落地力量超过45N（刚才修改的），就会被被扣重分！这样就不会重重踏地了。
             #vel_mismatch_exp = 0.3  # lin_z; ang x,y  速度奖励大可以鼓励机器人更多移动，与摆腿耦合
             low_speed = 2.0               # 【大幅提高】：明确补贴小指令下的移动，直接解决低速不跟随、>0.5才动的问题
             track_vel_hard = 8.0
@@ -323,7 +323,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.0
             #collision = 0.0
             #stand_still = 0.0
-            hip_pos = 0.0 # 【收紧容忍度】：只容忍0.0的偏差，也就是说只要劈叉超过0.0，Cost惩罚立刻启动。原0.1代表“容忍你往外撇一点点”。
+            hip_pos = 0.022 # 【设置微小容忍度】：给0.022的容忍空间(约0.2rad偏差)，防止因为小幅度的走动误差被拉格朗日乘子无限放大。
             #base_height = 0.0
             #foot_regular = 0.0
             #trot_contact = 1
@@ -356,15 +356,15 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         value_loss_coef = 1.0
         use_clipped_value_loss = True
         clip_param = 0.2
-        entropy_coef = 0.001
+        entropy_coef = 0.01
         num_learning_epochs = 5
         num_mini_batches = 4    # minibatch size = num_envs*nsteps/nminibatches
-        learning_rate = 1.e-4
-        schedule = 'adaptive'   # could be adaptive, fixed
+        learning_rate = 7e-5   # 【调低为微调速率】：从 1e-4 降为 5e-5，适合加载预训练模型(resume)后的温和改造，避免原本学会的技能被瞬间洗白
+        schedule = 'fixed'      # 【强制固定】：强行维持学习率，防止因刚修改过惩罚项导致 KL 激增从而断崖式掉 LR，could be adaptive, fixed
         gamma = 0.98
         lam = 0.95
         desired_kl = 0.01
-        max_grad_norm = 1.
+        max_grad_norm = 1.0
         weight_decay = 0
 
     class policy( LeggedRobotCfgPPO.policy):
@@ -397,4 +397,4 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
         resume = True
-        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar26_11-00-51_test_barlowtwins_phase2/model_3000.pt'
+        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar30_12-56-12_test_barlowtwins_phase2/model_8000.pt'

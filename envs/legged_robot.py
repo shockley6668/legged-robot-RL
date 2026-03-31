@@ -171,6 +171,9 @@ class LeggedRobot(BaseTask):
         self.commands_scale = torch.tensor([self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel], device=self.device, requires_grad=False,) # TODO change this
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
         self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        self.gait_phase = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.phase_t = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.current_cycle_time = torch.ones(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False) * self.cfg.rewards.cycle_time
         
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
@@ -808,6 +811,19 @@ class LeggedRobot(BaseTask):
             self.measured_heights = self._get_heights()
             self.feet_heights = self._get_feet_heights()
             
+        # --- Smooth Dynamic Phase Integration ---
+        velocity_magnitude = torch.norm(self.commands[:, :2], dim=1)
+        if hasattr(self.cfg.rewards, 'cycle_time_range'):
+            min_cycle, max_cycle = self.cfg.rewards.cycle_time_range[0], self.cfg.rewards.cycle_time_range[1]
+            vel_ratio = torch.clamp((velocity_magnitude - 0.2) / 0.6, 0.0, 1.0) # interpolate between 0.2 and 0.8 m/s
+            self.current_cycle_time = min_cycle + vel_ratio * (max_cycle - min_cycle)
+        else:
+            self.current_cycle_time[:] = self.cfg.rewards.cycle_time
+            
+        # Integrate phase smoothly (freq = 1 / full_stride_time = 1 / (current_cycle_time * 2))
+        self.phase_t = (self.phase_t + self.dt / (self.current_cycle_time * 2.0)) % 1.0
+        # ----------------------------------------
+            
         # if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
         #     self._push_robots()
     
@@ -1201,9 +1217,11 @@ class LeggedRobot(BaseTask):
         self.last_torques[env_ids] = 0.
         self.last_root_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
+        self.gait_phase[env_ids] = 0.
         if hasattr(self, 'feet_air_time_cost_timer'):
             self.feet_air_time_cost_timer[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
+        self.phase_t[env_ids] = 0.0
         self.reset_buf[env_ids] = 1
         self.obs_history_buf[env_ids, :, :] = 0.
         self.contact_buf[env_ids, :, :] = 0.
@@ -1590,9 +1608,7 @@ class LeggedRobot(BaseTask):
         return feet_height
     #----------------------phase---------------------
     def  _get_phase(self):
-        cycle_time = self.cfg.rewards.cycle_time*2
-        phase = self.episode_length_buf * self.dt / cycle_time
-        return phase
+        return self.phase_t
     
     def _get_gait_phase(self):
         # return float mask 1 is stance, 0 is swing
@@ -1952,12 +1968,17 @@ class LeggedRobot(BaseTask):
         #return torch.sum(torch.multiply(self.torques, self.dof_vel), dim=1)
 
     def _reward_dof_vel(self):
-        # Penalize dof velocities
-        return torch.sum(torch.square(self.dof_vel), dim=1)
+        # Penalize dof velocities only if they exceed a certain threshold (deadzone)
+        # 允许最大转速到 2.0 rad/s，相当于 172度/秒，超过才扣分
+        vel_excess = torch.clamp(torch.abs(self.dof_vel) - 5.0, min=0.0)
+        return torch.sum(torch.square(vel_excess), dim=1)
     
     def _reward_dof_acc(self):
-        # Penalize dof accelerations
-        return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
+        # Penalize dof accelerations only if they exceed a certain threshold (deadzone)
+        # 允许最大加速度 70 rad/s^2，这是一个更符合腿部急速摆动的极限
+        acc = (self.last_dof_vel - self.dof_vel) / self.dt
+        acc_excess = torch.clamp(torch.abs(acc) - 90.0, min=0.0)
+        return torch.sum(torch.square(acc_excess), dim=1)
     
     def _reward_action_rate(self):
         # Penalize changes in actions
@@ -2058,7 +2079,7 @@ class LeggedRobot(BaseTask):
         first_contact_float = first_contact.float()
         
         # Calculate air time relative to target cycle time
-        rew_airTime = torch.sum((self.feet_air_time - self.cfg.rewards.cycle_time) * first_contact_float, dim=1)
+        rew_airTime = torch.sum((self.feet_air_time - self.current_cycle_time.unsqueeze(1)) * first_contact_float, dim=1)
         
         # Differentiate based on movement command safely via float Tensors
         is_moving_cmd = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
@@ -2268,9 +2289,9 @@ class LeggedRobot(BaseTask):
         # Allow hip yaw (L0, R0) to move when turning. Allow hip roll (L1, R1) to move when walking sideways.
         temp = self.dof_pos[:, [0,1, 5,6]] - self.default_dof_pos[:, [0,1, 5,6]]
         
-        # 使用更平缓的指数衰减并加上保底惩罚，防止为了侧行/转向而彻底放飞自我（劈叉）
-        vy_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 1])) * 0.8 + 0.2
-        vw_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 2])) * 0.8 + 0.2
+        # 旋转和侧行时大幅豁免，只留极小的保底惩罚防止严重劈叉
+        vy_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 1])) * 0.95 + 0.05
+        vw_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 2])) * 0.95 + 0.05
         
         # 旋转和侧行时适当豁免，但保留基础惩罚不至于劈叉 
         temp[:,0] *= vw_punish_ratio 
@@ -2425,8 +2446,8 @@ class LeggedRobot(BaseTask):
         is_moving = torch.clamp(is_moving_cmd + is_disturbed, max=1.0)
         is_standing = 1.0 - is_moving
         
-        # Calculate moving deficit (if air_time < cycle_time, deficit is positive)
-        air_time_deficit = torch.sum((self.cfg.rewards.cycle_time - self.feet_air_time_cost_timer) * first_contact_float, dim=1)
+        # Calculate moving deficit (if air_time < cycle_time, deficit is positive) using current cycle_time
+        air_time_deficit = torch.sum((self.current_cycle_time.unsqueeze(1) - self.feet_air_time_cost_timer) * first_contact_float, dim=1)
         
         # During moving: penalize inadequate air time (too short steps)
         cost_moving = torch.max(torch.zeros_like(air_time_deficit), air_time_deficit) * is_moving
@@ -2474,9 +2495,9 @@ class LeggedRobot(BaseTask):
         # 同样需要加入基于命令的豁免机制，否则拉格朗日乘子会把侧行和转向锁死
         temp=self.dof_pos[:, [0,1, 5,6]] - self.default_dof_pos[:, [0,1, 5,6]]
         
-        # 【修改点】：使用更平缓的指数衰减并加上保底惩罚
-        vy_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 1])) * 0.8 + 0.2 # 侧移指令
-        vw_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 2])) * 0.8 + 0.2 # 旋转指令
+        # 【修改点】：旋转和侧行时大幅度豁免，尤其在Cost惩罚中千万不能设高保底，否则拉格朗日乘子会飙升锁死动作
+        vy_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 1])) * 0.95 + 0.05 # 侧移指令
+        vw_punish_ratio = torch.exp(-5.0 * torch.abs(self.commands[:, 2])) * 0.95 + 0.05 # 旋转指令
         
         # 旋转时豁免 L0/R0 Yaw (带保底)
         temp[:,0] *= vw_punish_ratio
