@@ -48,13 +48,13 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
 
         default_joint_angles = { # = target angles [rad] when action = 0.0
             'J_L0':   0.0,   # [rad]
-            'J_L1':  0.08,   # [rad]
+            'J_L1':  0.0,   # [rad]
             'J_L2':  0.56,   # [rad]
             'J_L3':  -1.12,   # [rad]
             'J_L4_ankle': -0.57,   # [rad]
 
             'J_R0':   0.0,   # [rad]
-            'J_R1':  -0.08,   # [rad]
+            'J_R1':  0.0,   # [rad]
             'J_R2':  -0.56,   # [rad]
             'J_R3':  1.12,   # [rad]
             'J_R4_ankle': 0.57,   # [rad] 
@@ -62,13 +62,13 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
 
         default_joint_angles_st = { # UNIFIED: same as default_joint_angles for consistency
             'J_L0':   0.0,   # [rad]
-            'J_L1':  0.08,   # [rad]  Same as walking pose
+            'J_L1':  0.00,   # [rad]  Same as walking pose
             'J_L2':  0.56,   # [rad]
             'J_L3':  -1.12,   # [rad]
             'J_L4_ankle': -0.57,   # [rad]
 
             'J_R0':   0.0,   # [rad]
-            'J_R1':  -0.08,   # [rad]  Same as walking pose
+            'J_R1':  0.00,   # [rad]  Same as walking pose
             'J_R2':  -0.56,   # [rad]
             'J_R3':  1.12,   # [rad]
             'J_R4_ankle': 0.57,   # [rad] 
@@ -151,14 +151,14 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         clearance_height_target = -0.25 # 【修改目标离地间隙】：之前-0.21要求相对于重心抬升高达12cm，现改为-0.25(抬升8cm左右)，降动作幅度
         tracking_sigma = 0.1 # 【恢复为正常范围0.1，官方默认0.25】：极端的0.001会导致网络因得不到正向梯度而放弃学习，直接摆烂。
 
-        cycle_time = 0.4 # 作为兜底参数
-        cycle_time_range = [0.45, 0.25] # 核心：低速时单腿挥动0.45s(全步态0.9s，走得慢且稳)，高速时单腿挥动0.25s(全步态0.5s，高频步态)
+        cycle_time = 0.3 # 作为兜底参数
+        # cycle_time_range = [0.45, 0.25] # 核心：低速时单腿挥动0.45s(全步态0.9s，走得慢且稳)，高速时单腿挥动0.25s(全步态0.5s，高频步态)
         touch_thr = 10.0 #N 【修改】：约1kg承重。双足机器人走路时，脚底必须受力超过1kg才能认定为踏实地面，避免微小蹭地欺骗判定
-        command_dead = 0.05  # INCREASED from 0.01 to 0.05 - larger dead zone for better zero-velocity control
-        stop_rate = 0.7  # ENHANCED: Increased from 0.5 (50% zero-velocity training for better standing)
+        command_dead = -1.0  # ALWAYS evaluate as moving to disable stand_still logic  # INCREASED from 0.01 to 0.05 - larger dead zone for better zero-velocity control
+        stop_rate = 0.8  # ENHANCED: Increased from 0.5 (50% zero-velocity training for better standing)
         target_joint_pos_scale = 0.17    # rad
         
-        max_contact_force = 140.0 #N 【大幅放宽】：机器人自重约9kg(单腿静止45N)，考虑迈步时的2-3倍动量冲击，承受150N是正常的，超150N才算砸地
+        max_contact_force = 135.0 #N 【大幅放宽】：机器人自重约9kg(单腿静止45N)，考虑迈步时的2-3倍动量冲击，承受150N是正常的，超150N才算砸地
         class scales( LeggedRobotCfg.rewards.scales ):
             termination = -20.0
             tracking_lin_vel = 20.0     # 提高跟速奖励，对抗平滑惩罚，解决低速不走的问题
@@ -177,31 +177,31 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             action_smoothness = -1.0 # 【恢复】：解除极端的动作平滑惩罚，以恢复低速踏步的动作意愿
             torques = -8e-6          # 不要惩罚太大，否则机器人会为了省力矩而无法支撑体重（导致下蹲劈叉）
             dof_vel = -0.005         # 【重新加重】：因为已经添加了死区(3.0rad/s)，超出部分一定是“爆转”，给予一定程度的惩罚
-            dof_acc = -5e-5          # 【重新加重】：因为已经添加了死区(60rad/s2)，超出部分是“爆冲”，给予惩罚
+            dof_acc = -8e-4          # 【重新加重】：因为已经添加了死区(60rad/s2)，超出部分是“爆冲”，给予惩罚
             
             # Limit Violations (Start Penalizing)
             dof_pos_limits = -10.0
             torque_limits = -0.1
             
-            # ADJUSTED penalties for standing still
-            stand_still = -8.0              # 【更加重惩罚】彻底解决站立时脚1前1后和hip歪的问题，静止时必须完美复原默认姿态！
-            stand_still_force = 0.3         # Force penalty
-            stand_still_step_punish = -3.0   # 严禁原地抽搐踏步
-            base_stability = -2.0            # Stability penalty
+            # # 【关闭原地站桩惩罚】：不再要求速度为0时必须静止，允许原地踏步
+            # stand_still = 0.0              
+            # stand_still_force = 0.0        
+            # stand_still_step_punish = 0.0   
+            # base_stability = 0.0            
             
             # --- 解决侧行卡死的关键 ---
             # 机器人没有Ankle Roll横向踝关节，侧向跨步必然导致躯干短暂侧倾。由于侧向跟速收益有限(6分)，如果躯干倾斜惩罚过高(原先15.0或5.0)，网络宁可扣掉跟速分，也绝对不敢动！
             orientation_eular= 2.5           # 【稍微调软平衡奖励】：允许一定程度的上半身微微侧倾，换取腿能够靠拢且依然能侧移。
             
-            feet_air_time = 1.0             # 【大幅降低】：既然你想让它走得又轻又稳，就绝不能为了赚滞空分数而高抬腿硬踩。
+            feet_air_time = 8.0             # 【大幅降低】：既然你想让它走得又轻又稳，就绝不能为了赚滞空分数而高抬腿硬踩。
             foot_clearance = -2.0 # 【大幅降低】：允许相对贴地的步态
             foot_clearance_positive = 1.0  # 完全不鼓励把腿抬太高
             stumble= -0.05
             
             no_jump = 1.7
  
-            # --- 解决静止时劈叉问题的关键 ---
-            hip_pos= -35.0                    # 【再加重】解决hip还是有点歪的问题，严格约束hip回正。
+            # --- 解决内八劈叉的关键 ---
+            hip_pos = -25.0                    # 【超级加重】严打“内八”与劈叉！只要敢偏离直立跨步轨迹，直接扣重分！
             #feet_rotation = 1e-1
             feet_rotation1 = 0.3
             feet_rotation2 = 0.3
@@ -220,13 +220,13 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         randomize_restitution = True
         restitution_range = [0.0,1.0]
         randomize_base_mass = True
-        added_mass_range = [-1.5, 1.5] # Increased mass range
+        added_mass_range = [-2.0, 2.0] #  扩大质量随机区间，对抗实机自重测量误差
         randomize_base_com = True
-        added_com_range = [-0.03, 0.03] # Increased COM range
+        added_com_range = [-0.05, 0.05] # 扩大质心偏移
         push_robots = True
         push_interval_s = 4.0             # Push more frequently for robust balance
-        max_push_vel_xy = 0.5         # Stronger push force (phase 2 training)
-        max_push_ang_vel = 0.5          # Angular disturbance (phase 2)
+        max_push_vel_xy = 0.7         #  增强扰动速度，逼迫机器人学会“大跨步回位”
+        max_push_ang_vel = 0.6          # Angular disturbance
         # dynamic randomization
         # action_delay = 0.5
         action_noise = 0.015
@@ -259,10 +259,10 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         # randomize_lag_timesteps_perstep = False
         # lag_timesteps_range = [5, 40]
         
-        add_dof_lag = False
+        add_dof_lag = True # [加强排查1] 实机电机反馈存在网络延迟（CAN/EtherCAT），必须开启
         randomize_dof_lag_timesteps = True
-        randomize_dof_lag_timesteps_perstep = False
-        dof_lag_timesteps_range = [0, 1]
+        randomize_dof_lag_timesteps_perstep = True # [核心杀手锏] 让每一步的延迟都可能抖动（模拟抖动Jitter），打断固定延迟的死记硬背
+        dof_lag_timesteps_range = [0, 2] # 0~40ms 的随机延迟跳动
         
         add_dof_pos_vel_lag = False #影响性能
         randomize_dof_pos_lag_timesteps = False
@@ -274,8 +274,8 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         
         add_imu_lag =  True
         randomize_imu_lag_timesteps = True
-        randomize_imu_lag_timesteps_perstep = False
-        imu_lag_timesteps_range = [0, 1]
+        randomize_imu_lag_timesteps_perstep = True # [核心杀手锏] IMU数据的读取存在频率跳动
+        imu_lag_timesteps_range = [0, 2] # 扩大IMU延迟范围，实机IMU滤波本身就会引入相位滞后
         
 
     class depth( LeggedRobotCfg.depth):
@@ -310,7 +310,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.1
             #collision = 0.1
             #stand_still = 0.1 #站立默认位置
-            hip_pos = 3.0 # 【大幅加重】：拉格朗日Cost的惩罚系数，原1.5。强化不歪的要求
+            hip_pos = 0.1 # 【大幅加重】：拉格朗日Cost的惩罚系数，原1.5。强化不歪的要求
             #base_height = 0.1
             #foot_regular = 0.1
             #trot_contact = 0.1
@@ -323,7 +323,7 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
             #acc_smoothness = 0.0
             #collision = 0.0
             #stand_still = 0.0
-            hip_pos = 0.022 # 【设置微小容忍度】：给0.022的容忍空间(约0.2rad偏差)，防止因为小幅度的走动误差被拉格朗日乘子无限放大。
+            hip_pos = 0.1 # 【设置微小容忍度】：给0.022的容忍空间(约0.2rad偏差)，防止因为小幅度的走动误差被拉格朗日乘子无限放大。
             #base_height = 0.0
             #foot_regular = 0.0
             #trot_contact = 1
@@ -359,8 +359,8 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         entropy_coef = 0.01
         num_learning_epochs = 5
         num_mini_batches = 4    # minibatch size = num_envs*nsteps/nminibatches
-        learning_rate = 7e-5   # 【调低为微调速率】：从 1e-4 降为 5e-5，适合加载预训练模型(resume)后的温和改造，避免原本学会的技能被瞬间洗白
-        schedule = 'fixed'      # 【强制固定】：强行维持学习率，防止因刚修改过惩罚项导致 KL 激增从而断崖式掉 LR，could be adaptive, fixed
+        learning_rate = 3e-4    # 【调低为微调速率】：从 1e-4 降为 5e-5，适合加载预训练模型(resume)后的温和改造，避免原本学会的技能被瞬间洗白
+        schedule = 'adaptive'      # 【强制固定】：强行维持学习率，防止因刚修改过惩罚项导致 KL 激增从而断崖式掉 LR，could be adaptive, fixed
         gamma = 0.98
         lam = 0.95
         desired_kl = 0.01
@@ -397,4 +397,4 @@ class TinkerConstraintHimRoughCfgPPO( LeggedRobotCfgPPO ):
         save_interval = SAVE_DIV #保存周期
         num_steps_per_env = 24
         resume = True
-        resume_path = '/home/fsr/legged-robot-RL/logs/rough_go2_constraint/Mar30_12-56-12_test_barlowtwins_phase2/model_8000.pt'
+        resume_path = '/home/fsr/legged-robot-RL/modelt.pt'

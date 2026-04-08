@@ -814,9 +814,10 @@ class LeggedRobot(BaseTask):
         # --- Smooth Dynamic Phase Integration ---
         velocity_magnitude = torch.norm(self.commands[:, :2], dim=1)
         if hasattr(self.cfg.rewards, 'cycle_time_range'):
-            min_cycle, max_cycle = self.cfg.rewards.cycle_time_range[0], self.cfg.rewards.cycle_time_range[1]
-            vel_ratio = torch.clamp((velocity_magnitude - 0.2) / 0.6, 0.0, 1.0) # interpolate between 0.2 and 0.8 m/s
-            self.current_cycle_time = min_cycle + vel_ratio * (max_cycle - min_cycle)
+            # min_cycle, max_cycle = self.cfg.rewards.cycle_time_range[0], self.cfg.rewards.cycle_time_range[1]
+            # vel_ratio = torch.clamp((velocity_magnitude - 0.2) / 0.6, 0.0, 1.0) # interpolate between 0.2 and 0.8 m/s
+            # self.current_cycle_time = min_cycle + vel_ratio * (max_cycle - min_cycle)
+            self.current_cycle_time[:] = self.cfg.rewards.cycle_time
         else:
             self.current_cycle_time[:] = self.cfg.rewards.cycle_time
             
@@ -2085,7 +2086,7 @@ class LeggedRobot(BaseTask):
         is_moving_cmd = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
         
         # Determine if disturbed (allow recovery stepping)
-        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)).float()
+        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)).float()
         
         # 允许严重偏离姿态时离开双脚支撑，以方便调整
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2190,7 +2191,7 @@ class LeggedRobot(BaseTask):
     def _reward_stand_still(self):
         # Penalize motion at zero commands
         # Allow stepping (do not penalize) if disturbed by a push (high base velocity)
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         
         # 同样在偏离默认姿态过大时豁免，允许关节移动去恢复站姿
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2206,7 +2207,7 @@ class LeggedRobot(BaseTask):
         # = self.contact_force2 - self.contact_force1
         rew = torch.exp(-torch.square(0.01*(left_foot_force -right_foot_force)))
         #rew += torch.sum(self.sqrdexp(0.01*foot_force_acc), dim=-1)/2.
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         is_static = (torch.norm(self.commands[:, :3], dim=1) <  self.cfg.rewards.command_dead) & ~is_disturbed
         return rew * is_static
 
@@ -2217,7 +2218,7 @@ class LeggedRobot(BaseTask):
         
         stable_contact = num_contacts >= 2 # Both feet on ground
         
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         
         # 允许严重偏离姿态时离开双脚支撑，以方便调整
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2242,7 +2243,7 @@ class LeggedRobot(BaseTask):
         # Update history for next frame
         self.last_contacts_custom = contacts.clone()
         
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         
         # 计算关节偏离程度，如果相差过大，也允许踏步（即豁免 is_static）
         # 这里以当前所有关节相对默认位姿的误差作为指标，当误差超过某阈值，说明此时已经“劈叉”或偏离严重，允许它走两步调整回来。
@@ -2259,7 +2260,7 @@ class LeggedRobot(BaseTask):
         Penalize base movement (linear and angular velocity) when commanded to stand still.
         This directly penalizes body motion rather than just joint motion.
         """
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead) & ~is_disturbed
         
         # Penalize XY linear velocity (forward/backward, left/right movement)
@@ -2343,7 +2344,7 @@ class LeggedRobot(BaseTask):
         no_contact = torch.sum(1.*contacts, dim=1)==0
         
         is_moving_cmd = torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         
         # 允许严重偏离姿态时离开双脚支撑，以方便调整
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2441,7 +2442,7 @@ class LeggedRobot(BaseTask):
         is_moving_cmd = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
         
         # Determine if disturbed (allow recovery stepping)
-        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)).float()
+        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)).float()
         
         is_moving = torch.clamp(is_moving_cmd + is_disturbed, max=1.0)
         is_standing = 1.0 - is_moving
@@ -2482,7 +2483,7 @@ class LeggedRobot(BaseTask):
     
     def _cost_stand_still(self):
         # Penalize motion at zero commands
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
         
         # 同样在偏离默认姿态过大时豁免，允许关节移动去恢复站姿
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
