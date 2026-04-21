@@ -83,8 +83,9 @@ class TinkerConstraintHimRoughCfg( LeggedRobotCfg ):
         # stiffness = {'joint': 10.0}  # [N*m/rad]
         # damping = {'joint': 0.4}     # [N*m*s/rad]
         # 恢复接近实机的较软刚度，依靠RL的Reward强化约束它站立
-        stiffness = {'J_L0': 15, 'J_L1': 15,'J_L2': 15, 'J_L3':15, 'J_L4_ankle':13,
-                     'J_R0': 15, 'J_R1': 15,'J_R2': 15, 'J_R3':15, 'J_R4_ankle':13}
+        # 方案A：J_L0/R0(effort=12Nm)和J_L4/R4(effort=12Nm)降到Kp=10，避免力矩超限被clamp
+        stiffness = {'J_L0': 10, 'J_L1': 15,'J_L2': 15, 'J_L3':15, 'J_L4_ankle':10,
+                     'J_R0': 10, 'J_R1': 15,'J_R2': 15, 'J_R3':15, 'J_R4_ankle':10}
         damping = {'J_L0': 0.3, 'J_L1': 0.65,'J_L2': 0.65, 'J_L3':0.65, 'J_L4_ankle':0.3,
                    'J_R0': 0.3, 'J_R1': 0.65,'J_R2': 0.65, 'J_R3':0.65, 'J_R4_ankle':0.3}
 

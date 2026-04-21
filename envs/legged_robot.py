@@ -802,6 +802,18 @@ class LeggedRobot(BaseTask):
         """
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
+        
+        # 【指令平滑】防止指令跳变导致前倾起步
+        # 平滑因子：0.05 表示每步只接近目标的5%，约20步(0.4秒)完成过渡
+        if hasattr(self, '_cmd_targets'):
+            smooth_factor = getattr(self.cfg.commands, 'smooth_factor', 0.05)
+            # 保存新采样的指令作为目标
+            self._cmd_targets[env_ids] = self.commands[env_ids, :3].clone()
+            # 平滑过渡：当前指令 → 逐步接近目标
+            self.commands[:, :3] = self.commands[:, :3] * (1 - smooth_factor) + self._cmd_targets * smooth_factor
+        else:
+            # 首次调用：初始化目标缓冲
+            self._cmd_targets = self.commands[:, :3].clone()
 
         # Heading Logic REMOVED/DISABLED by FSR FIX
         # if False and self.cfg.commands.heading_command: ...
@@ -2080,13 +2092,17 @@ class LeggedRobot(BaseTask):
         first_contact_float = first_contact.float()
         
         # Calculate air time relative to target cycle time
-        rew_airTime = torch.sum((self.feet_air_time - self.current_cycle_time.unsqueeze(1)) * first_contact_float, dim=1)
+        # 【限制高额滞空收益】防止网络为了刷分，发明出“一只脚当拐杖，另一只脚疯狂在空中停留”的跛行步态
+        rew_airTime = torch.sum((self.feet_air_time - self.current_cycle_time.unsqueeze(1)).clip(max=0.1) * first_contact_float, dim=1)
+        
+        # 【致命杀手锏】：如果你胆敢把脚停留在超过 0.44 秒钟不落地（单脚金鸡独立），直接每一步狂扣分，逼迫你赶紧把脚放下来！
+        rew_airTime -= torch.sum((self.feet_air_time - 0.44).clip(min=0.0) * 2.0, dim=1)
         
         # Differentiate based on movement command safely via float Tensors
         is_moving_cmd = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
         
         # Determine if disturbed (allow recovery stepping)
-        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)).float()
+        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.4)).float()
         
         # 允许严重偏离姿态时离开双脚支撑，以方便调整
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2141,13 +2157,22 @@ class LeggedRobot(BaseTask):
         #print(footpos_in_body_frame[:, :, 2])
         #print(footpos_in_body_frame[0,:,2],base_height[0])
         
-        # 修复逻辑：只在由于抬得不够高（< clearance_height_target）时才产生 error 扣分。
-        # 如果超出目标高度（抬得再高），clip归0，绝不扣分！
+        # 给定一个 0.05 米 (5cm) 的宽容范围，太低了不行，太高了也不行。
         target_z = self.cfg.rewards.clearance_height_target
+        max_z = target_z + 0.02 # 只允许比目标高2cm，超出就惩罚（原5cm太宽松）
         foot_z = footpos_in_body_frame[:, :, 2]
-        height_error = torch.square((target_z - foot_z).clip(min=0)).view(self.num_envs, -1)
         
-        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        # 拖地惩罚：抬得比 target_z (-0.25) 还低
+        under_error = (target_z - foot_z).clip(min=0)
+        # 高抬腿惩罚：抬得比 max_z (-0.20) 还高
+        over_error = (foot_z - max_z).clip(min=0)
+        
+        # 改为加上绝对值（而不是平方），因为误差很小（0.1~0.2米），平方会使其微乎其微！
+        height_error = (under_error + 5.0 * over_error).view(self.num_envs, -1)
+        
+        # 【致命BUG修复】：不能使用相对于身体的速度！因为那样的话，支撑脚（在世界坐标系中静止）
+        # 相对于移动的身体会有向后的速度，导致支撑脚在地上时被疯狂扣分！这正是导致机器人“金鸡独立”和倾斜的原因
+        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(self.feet_vel[:, :, :2]), dim=2)).view(self.num_envs, -1)
         
         # # 调试输出：每10步抽样一次，当某条腿在摆动时，打印其实际离身体的高度
         # if self.episode_length_buf[0] % 10 == 0:
@@ -2170,8 +2195,18 @@ class LeggedRobot(BaseTask):
             footvel_in_body_frame[:, i, :] = cur_footvel_translated[:, i, :]
         #print(footpos_in_body_frame[:, :, 2])
         
-        height_error = torch.square((self.cfg.rewards.clearance_height_target-footpos_in_body_frame[:, :, 2]).clip(min=0)).view(self.num_envs, -1)
-        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        # 给定一个 0.05 米 (5cm) 的宽容范围，太低了不行，太高了也不行。
+        target_z = self.cfg.rewards.clearance_height_target
+        max_z = target_z + 0.05 # 允许的最高高度
+        foot_z = footpos_in_body_frame[:, :, 2]
+        
+        under_error = (target_z - foot_z).clip(min=0)
+        over_error = (foot_z - max_z).clip(min=0)
+        height_error = (under_error + 5.0 * over_error).view(self.num_envs, -1)
+        
+        # 同样修复：使用世界坐标系速度，避免支撑脚被重复重罚
+        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(self.feet_vel[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        
         reward=torch.sum(height_error * foot_leteral_vel, dim=1)*(torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead)
         #print(footpos_in_body_frame[0,:,2],base_height[0],self.cfg.rewards.clearance_height_target,reward[0])
         return  reward
@@ -2189,87 +2224,112 @@ class LeggedRobot(BaseTask):
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) - self.cfg.rewards.max_contact_force).clip(0, 100), dim=1)
       
     def _reward_stand_still(self):
-        # Penalize motion at zero commands
-        # Allow stepping (do not penalize) if disturbed by a push (high base velocity)
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
-        
-        # 同样在偏离默认姿态过大时豁免，允许关节移动去恢复站姿
-        dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
-        needs_recovery = dof_err > 0.8
-        
-        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead) & ~is_disturbed & ~needs_recovery
+        # 【移除is_disturbed】只看指令速度，彻底打破死循环
+        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead).float()
         return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos_st), dim=1) * is_static
 
+    def _reward_variable_posture(self):
+        """
+        BDX-R 风格的三档速度自适应姿态约束。
+        
+        核心思想：不再依赖 is_disturbed 二分法，而是根据指令速度自动调整
+        每个关节的容忍度(std)。永远活跃，不存在死循环问题。
+        
+        三档划分:
+        - standing (total_speed < 0.05): 所有关节锁紧 (std=0.05)
+        - walking (0.05 <= total_speed < 0.3): 放开髋 pitch + 膝盖
+        - running (total_speed >= 0.3): 进一步放宽所有关节
+        
+        公式: R = exp(-mean(error² / std²))
+        std越小越严格，偏差一点就扣分; std越大越宽松
+        """
+        # 缓存 tensor（只在第一次调用时创建）
+        if not hasattr(self, '_vp_std_standing'):
+            # 关节顺序: [L0(yaw), L1(roll), L2(pitch), L3(knee), L4(ankle),
+            #            R0(yaw), R1(roll), R2(pitch), R3(knee), R4(ankle)]
+            self._vp_std_standing = torch.tensor(
+                getattr(self.cfg.rewards, 'std_standing',
+                    [0.05, 0.05, 0.05, 0.05, 0.05,
+                     0.05, 0.05, 0.05, 0.05, 0.05]),
+                device=self.device, dtype=torch.float)
+            self._vp_std_walking = torch.tensor(
+                getattr(self.cfg.rewards, 'std_walking',
+                    [0.15, 0.05, 0.5, 0.5, 0.15,
+                     0.15, 0.05, 0.5, 0.5, 0.15]),
+                device=self.device, dtype=torch.float)
+            self._vp_std_running = torch.tensor(
+                getattr(self.cfg.rewards, 'std_running',
+                    [0.3, 0.1, 0.8, 0.8, 0.4,
+                     0.3, 0.1, 0.8, 0.8, 0.4]),
+                device=self.device, dtype=torch.float)
+            self._vp_walking_thr = getattr(self.cfg.rewards, 'walking_threshold', 0.05)
+            self._vp_running_thr = getattr(self.cfg.rewards, 'running_threshold', 0.3)
+        
+        # 计算总指令速度 (线速度 + 角速度)
+        total_speed = torch.norm(self.commands[:, :2], dim=1) + torch.abs(self.commands[:, 2])
+        
+        # 三档分类 (互斥)
+        is_standing = (total_speed < self._vp_walking_thr).float().unsqueeze(1)
+        is_running = (total_speed >= self._vp_running_thr).float().unsqueeze(1)
+        is_walking = 1.0 - is_standing - is_running
+        
+        # 混合每个关节的容忍度
+        std = (is_standing * self._vp_std_standing +
+               is_walking * self._vp_std_walking +
+               is_running * self._vp_std_running)
+        
+        # 计算关节偏差
+        error_sq = torch.square(self.dof_pos - self.default_dof_pos)
+        
+        # R = exp(-mean(error² / std²))
+        # standing时 std=0.05: 偏差0.1rad → exp(-mean(4.0)) ≈ 0.02 (重罚)
+        # walking时 std=0.5:  偏差0.3rad → exp(-mean(0.36)) ≈ 0.7 (轻罚)
+        reward = torch.exp(-torch.mean(error_sq / torch.square(std), dim=1))
+        
+        return reward
+
     def _reward_stand_still_force(self):
-        #print(self.commands[0, :2])
         left_foot_force = self.contact_forces[:, self.feet_indices[0], 2]
         right_foot_force = self.contact_forces[:, self.feet_indices[1], 2]
-        # = self.contact_force2 - self.contact_force1
-        rew = torch.exp(-torch.square(0.01*(left_foot_force -right_foot_force)))
-        #rew += torch.sum(self.sqrdexp(0.01*foot_force_acc), dim=-1)/2.
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
-        is_static = (torch.norm(self.commands[:, :3], dim=1) <  self.cfg.rewards.command_dead) & ~is_disturbed
+        rew = torch.exp(-torch.square(0.01*(left_foot_force - right_foot_force)))
+        # 【移除is_disturbed】只看指令速度
+        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead).float()
         return rew * is_static
 
     def _reward_stand_2leg(self):
-        # Reward having 2 feet contact when static (stable standing for biped)
+        # 【移除is_disturbed】只看指令速度
         contacts = self.contact_forces[:, self.feet_indices, 2] > self.cfg.rewards.touch_thr
-        num_contacts = torch.sum(1.*contacts, dim=1)
-        
-        stable_contact = num_contacts >= 2 # Both feet on ground
-        
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
-        
-        # 允许严重偏离姿态时离开双脚支撑，以方便调整
-        dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
-        needs_recovery = dof_err > 0.8
-        
-        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead) & ~is_disturbed & ~needs_recovery
-        
-        # Give reward if static AND stable
+        stable_contact = torch.sum(1.*contacts, dim=1) >= 2
+        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead).float()
         return stable_contact.float() * is_static
 
     def _reward_stand_still_step_punish(self):
-        # Penalize stepping (contact changes) when commanded to stand still
+        """
+        持续惩罚零速时脚离地。
+        
+        【关键改动】不再使用 is_disturbed！
+        原因：踏步本身产生 >0.5m/s 的速度 → 触发 is_disturbed → 豁免惩罚 → 继续踏步（死循环）
+        现在只看指令速度，彻底打破死循环。
+        """
         contacts = self.contact_forces[:, self.feet_indices, 2] > self.cfg.rewards.touch_thr
         
-        # Initialize custom history if needed (to avoid conflict with main loop updates)
-        if not hasattr(self, 'last_contacts_custom'):
-            self.last_contacts_custom = torch.zeros_like(contacts)
-            
-        # Check if contact state changed from last frame
-        contact_changed = (contacts != self.last_contacts_custom)
+        # 只看指令速度，不看实际速度（避免鸡生蛋死循环）
+        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead).float()
         
-        # Update history for next frame
-        self.last_contacts_custom = contacts.clone()
+        # 每只脚不在地上就扣1分/帧
+        feet_in_air = (~contacts).float()
+        air_penalty = torch.sum(feet_in_air, dim=1)  # 0~2 per frame
         
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
+        # 空中停留时间越长惩罚越重
+        air_time_penalty = torch.sum(self.feet_air_time, dim=1)
         
-        # 计算关节偏离程度，如果相差过大，也允许踏步（即豁免 is_static）
-        # 这里以当前所有关节相对默认位姿的误差作为指标，当误差超过某阈值，说明此时已经“劈叉”或偏离严重，允许它走两步调整回来。
-        dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
-        needs_recovery = dof_err > 0.8 # 阈值可调，0.8左右大概表示较大幅度的偏离
-        
-        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead) & ~is_disturbed & ~needs_recovery
-        
-        # Sum of changes across all feet. If static, any change is bad.
-        return torch.sum(contact_changed, dim=1).float() * is_static
-    
+        return (air_penalty + air_time_penalty) * is_static
+
     def _reward_base_stability(self):
-        """
-        Penalize base movement (linear and angular velocity) when commanded to stand still.
-        This directly penalizes body motion rather than just joint motion.
-        """
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
-        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead) & ~is_disturbed
-        
-        # Penalize XY linear velocity (forward/backward, left/right movement)
+        """惩罚零速时身体运动。【移除is_disturbed】只看指令速度"""
+        is_static = (torch.norm(self.commands[:, :3], dim=1) < self.cfg.rewards.command_dead).float()
         lin_vel_penalty = torch.norm(self.base_lin_vel[:, :2], dim=1)
-        
-        # Penalize XY angular velocity (roll and pitch rate - tilting)
         ang_vel_penalty = torch.norm(self.base_ang_vel[:, :2], dim=1)
-        
-        # Return combined penalty, only active when static
         return (lin_vel_penalty + ang_vel_penalty) * is_static
            
     def _reward_feet_contact_forces(self):
@@ -2302,7 +2362,9 @@ class LeggedRobot(BaseTask):
         temp[:,1] *= vy_punish_ratio
         temp[:,3] *= vy_punish_ratio
         
-        return torch.sum(torch.square(temp), dim=1)
+        # 必须使用绝对值(L1)惩罚！因为 square(x) 对小角度的微小偏离惩罚可以忽略不计。
+        # 坚决不使用死区，强力镇压任何偏离
+        return torch.sum(torch.abs(temp), dim=1)
 
     def _reward_ankle_pos(self):
         contact = self.contact_forces[:, self.feet_indices, 2] < self.cfg.rewards.touch_thr #swing phase
@@ -2322,58 +2384,49 @@ class LeggedRobot(BaseTask):
 
     def _reward_feet_rotation1(self):
         feet_euler_xyz = self.feet_euler_xyz
-        #rotation = torch.sum(torch.square(feet_euler_xyz[:,:,:2]),dim=[1,2])
         nag_contacts = self.contact_forces[:, self.feet_indices[0], 2] < self.cfg.rewards.touch_thr
-        rotation = (torch.square(feet_euler_xyz[:,0,1]))
-        r = torch.exp(-rotation*15)*nag_contacts
+        # 增加对 yaw (index=2) 和 roll (index=0) 的惩罚，防止脚尖往内转以及歪脚（外翻/内翻）
+        rotation = torch.square(feet_euler_xyz[:,0,0]) + torch.square(feet_euler_xyz[:,0,1]) + torch.square(feet_euler_xyz[:,0,2])
+        r = torch.exp(-rotation*15)*nag_contacts   
         return r
 
     def _reward_feet_rotation2(self):
         feet_euler_xyz = self.feet_euler_xyz
-        #rotation = torch.sum(torch.square(feet_euler_xyz[:,:,:2]),dim=[1,2])
         nag_contacts = self.contact_forces[:, self.feet_indices[1], 2] < self.cfg.rewards.touch_thr
-        rotation = (torch.square(feet_euler_xyz[:,1,1]))
+        # 同理增加对右脚 yaw 和 roll 的惩罚
+        rotation = torch.square(feet_euler_xyz[:,1,0]) + torch.square(feet_euler_xyz[:,1,1]) + torch.square(feet_euler_xyz[:,1,2])
         r = torch.exp(-rotation*15)*nag_contacts
         return r
         
     def _reward_no_jump(self):
-        # Penalize feet in the air at zero commands(static)
+        """
+        核心步态强制器：
+        - 有速度指令 → 必须交替踏步（单脚着地=奖励，双脚着地=重罚）
+        - 零速指令  → 必须站定（双脚着地=奖励）
+        """
         contacts = self.contact_forces[:, self.feet_indices, 2] > self.cfg.rewards.touch_thr
         double_contact = torch.sum(1.*contacts, dim=1)==2
         single_contact = torch.sum(1.*contacts, dim=1)==1
         no_contact = torch.sum(1.*contacts, dim=1)==0
         
-        is_moving_cmd = torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
+        is_moving = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
+        is_standing = (1.0 - is_moving)  # 只看指令，不用is_disturbed
         
-        # 允许严重偏离姿态时离开双脚支撑，以方便调整
-        dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
-        needs_recovery = dof_err > 0.8
+        # === Walking模式：必须踏步 ===
+        # 单脚着地 = 正在迈步 → 重奖
+        reward_walking_single = 2.0 * single_contact * is_moving
+        # 双脚着地 = 赖着不走 → 重罚（必须超过前倾滑行的收益）
+        reward_walking_double = -2.0 * double_contact * is_moving
+        # 双脚离地 = 跳跃 → 重罚
+        reward_walking_no_contact = -3.0 * no_contact * is_moving
         
-        is_moving = is_moving_cmd
-        # Ensure it is considered truly 'standing' only if commands are zero AND not disturbed AND not heavily deviated
-        is_standing = ~is_moving_cmd & ~is_disturbed & ~needs_recovery
-        
-        # During walking/moving: reward single contact (normal gait)
-        reward_walking_single = 1.0 * single_contact * is_moving
-        # During walking/moving: penalize no contact (jumping)
-        reward_walking_no_contact = -2.0 * no_contact * is_moving
-        # During walking/moving: slightly penalize double contact (should be alternating)
-        reward_walking_double = -0.5 * double_contact * is_moving
-        
-        # During standing still: reward double contact (stable standing)
+        # === Standing模式：必须站定 ===
         reward_standing_double = 1.5 * double_contact * is_standing
-        # During standing still: penalize single contact (stepping)
-        reward_standing_single = -1.0 * single_contact * is_standing
-        # During standing still: heavily penalize no contact (jumping)
-        reward_standing_no_contact = -2.5 * no_contact * is_standing
-        
-        # During recovery (disturbed): penalize jumping but allow single/double freely
-        is_recovering = ~is_moving_cmd & is_disturbed
-        reward_recovering_no_contact = -2.5 * no_contact * is_recovering
+        reward_standing_single = -1.5 * single_contact * is_standing
+        reward_standing_no_contact = -3.0 * no_contact * is_standing
         
         return reward_walking_single + reward_walking_no_contact + reward_walking_double + \
-               reward_standing_double + reward_standing_single + reward_standing_no_contact + reward_recovering_no_contact
+               reward_standing_double + reward_standing_single + reward_standing_no_contact
 
     def _reward_base_acc(self):
         """
@@ -2442,7 +2495,7 @@ class LeggedRobot(BaseTask):
         is_moving_cmd = (torch.norm(self.commands[:, :3], dim=1) > self.cfg.rewards.command_dead).float()
         
         # Determine if disturbed (allow recovery stepping)
-        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)).float()
+        is_disturbed = ((torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.4)).float()
         
         is_moving = torch.clamp(is_moving_cmd + is_disturbed, max=1.0)
         is_standing = 1.0 - is_moving
@@ -2483,7 +2536,7 @@ class LeggedRobot(BaseTask):
     
     def _cost_stand_still(self):
         # Penalize motion at zero commands
-        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.2) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.25)
+        is_disturbed = (torch.norm(self.base_lin_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.base_ang_vel[:, :2], dim=1) > 0.5) | (torch.norm(self.projected_gravity[:, :2], dim=1) > 0.4)
         
         # 同样在偏离默认姿态过大时豁免，允许关节移动去恢复站姿
         dof_err = torch.norm((self.dof_pos - self.default_dof_pos), dim=1)
@@ -2508,7 +2561,9 @@ class LeggedRobot(BaseTask):
         temp[:,1] *= vy_punish_ratio
         temp[:,3] *= vy_punish_ratio
         
-        return torch.sum(torch.square(temp), dim=1)
+        # 必须使用纯绝对值(L1)惩罚！因为 square(x) 在小角度(<0.2rad)时几乎是平的，RL完全可以靠轻度内八来偷懒。
+        # 也不能加死区，防止它利用死区发生偏倾。纯 abs 梯度恒定，逼迫它必须完美直立！
+        return torch.sum(torch.abs(temp), dim=1)
     
     def _cost_feet_height(self):
         # Reward high steps
@@ -2606,16 +2661,19 @@ class LeggedRobot(BaseTask):
             footpos_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footpos_translated[:, i, :])
             footvel_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footvel_translated[:, i, :])
         
-        height_error = torch.square(footpos_in_body_frame[:, :, 2] - self.cfg.rewards.clearance_height_target).view(self.num_envs, -1)
-        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        target_z = self.cfg.rewards.clearance_height_target
+        max_z = target_z + 0.05
+        foot_z = footpos_in_body_frame[:, :, 2]
+        
+        under_error = (target_z - foot_z).clip(min=0)
+        over_error = (foot_z - max_z).clip(min=0)
+        height_error = (under_error + 5.0 * over_error).view(self.num_envs, -1)
+        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(self.feet_vel[:, :, :2]), dim=2)).view(self.num_envs, -1)
         return torch.sum(height_error * foot_leteral_vel, dim=1)
     
     def _cost_foot_slide(self):
-        cur_footvel_translated = self.feet_vel - self.root_states[:, 7:10].unsqueeze(1)
-        footvel_in_body_frame = torch.zeros(self.num_envs, len(self.feet_indices), 3, device=self.device)
-        for i in range(len(self.feet_indices)):
-            footvel_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footvel_translated[:, i, :])
-        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        # 修复：支撑脚滑移应该惩罚的是“世界坐标系”下的足端速度！
+        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(self.feet_vel[:, :, :2]), dim=2)).view(self.num_envs, -1)
 
         contact = self.contact_forces[:, self.feet_indices, 2] > self.cfg.rewards.touch_thr
         contact_filt = torch.logical_or(contact, self.last_contacts)
@@ -2627,15 +2685,12 @@ class LeggedRobot(BaseTask):
     def _cost_foot_regular(self):#摆动约束
         cur_footpos_translated = self.feet_pos - self.root_states[:, 0:3].unsqueeze(1)
         footpos_in_body_frame = torch.zeros(self.num_envs, len(self.feet_indices), 3, device=self.device)
-        cur_footvel_translated = self.feet_vel - self.root_states[:, 7:10].unsqueeze(1)
-        footvel_in_body_frame = torch.zeros(self.num_envs, len(self.feet_indices), 3, device=self.device)
         for i in range(len(self.feet_indices)):
             footpos_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footpos_translated[:, i, :])
-            footvel_in_body_frame[:, i, :] = quat_rotate_inverse(self.base_quat, cur_footvel_translated[:, i, :])
-        
-        #height_error = torch.square(footpos_in_body_frame[:, :, 2] - self.cfg.rewards.clearance_height_target).view(self.num_envs, -1)
+            
         height_error = torch.clamp(torch.exp(footpos_in_body_frame[:, :, 2]/(0.025*self.cfg.rewards.base_height_target)).view(self.num_envs, -1),0,1)
-        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
+        # 同样修复：使用世界系速度，只有摆动期真正在移动的腿才受限
+        foot_leteral_vel = torch.sqrt(torch.sum(torch.square(self.feet_vel[:, :, :2]), dim=2)).view(self.num_envs, -1)
         return torch.sum(height_error * foot_leteral_vel, dim=1)
     
     def _cost_trot_contact(self):#相序约束

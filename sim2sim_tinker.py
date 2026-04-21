@@ -28,6 +28,11 @@ class cmd:
     vx = 0.0
     vy = 0.0
     dyaw = 0.0
+    # 平滑后的实际指令（传给策略的）
+    smooth_vx = 0.0
+    smooth_vy = 0.0
+    smooth_dyaw = 0.0
+    smooth_factor = 0.05  # 每步接近目标5%
 
 paused = False
 
@@ -311,9 +316,14 @@ def run_mujoco(policy, cfg):
                     obs[0, 3] = eu_ang[0] *cfg.normalization.obs_scales.quat
                     obs[0, 4] = eu_ang[1] *cfg.normalization.obs_scales.quat
                     obs[0, 5] = eu_ang[2] *cfg.normalization.obs_scales.quat
-                    obs[0, 6] = cmd.vx * cfg.normalization.obs_scales.lin_vel
-                    obs[0, 7] = cmd.vy * cfg.normalization.obs_scales.lin_vel
-                    obs[0, 8] = cmd.dyaw * cfg.normalization.obs_scales.ang_vel
+                    # 【指令平滑】键盘设置的是目标值，实际值平滑过渡
+                    cmd.smooth_vx += cmd.smooth_factor * (cmd.vx - cmd.smooth_vx)
+                    cmd.smooth_vy += cmd.smooth_factor * (cmd.vy - cmd.smooth_vy)
+                    cmd.smooth_dyaw += cmd.smooth_factor * (cmd.dyaw - cmd.smooth_dyaw)
+                    
+                    obs[0, 6] = cmd.smooth_vx * cfg.normalization.obs_scales.lin_vel
+                    obs[0, 7] = cmd.smooth_vy * cfg.normalization.obs_scales.lin_vel
+                    obs[0, 8] = cmd.smooth_dyaw * cfg.normalization.obs_scales.ang_vel
                     #print("q3",q)
                     #print("default_dof_pos",default_dof_pos)
 
@@ -421,11 +431,13 @@ if __name__ == '__main__':
             decimation = 20 # 100Hz
 
         class robot_config:
-            kp_all = 15.0
-            kd_all = 0.5
-            kps = np.array([kp_all, kp_all, kp_all, kp_all, kp_all, kp_all, kp_all, kp_all, kp_all, kp_all], dtype=np.double)#PD和isacc内部一致
-            kds = np.array([kd_all, kd_all, kd_all, kd_all, kd_all, kd_all, kd_all, kd_all, kd_all, kd_all], dtype=np.double)
-            tau_limit = 20. * np.ones(10, dtype=np.double)#nm
+            # 方案A: 与训练配置一致的差异化PD增益
+            # J_L0/R0(Hip Yaw, effort=12Nm), J_L4/R4(Ankle, effort=12Nm) → Kp=10
+            # J_L1/R1/L2/R2/L3/R3(effort=20Nm) → Kp=15
+            kps = np.array([15, 15, 15, 15, 15, 15, 15, 15, 15, 15], dtype=np.double)
+            kds = np.array([0.5, 0.55, 0.55, 0.55, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], dtype=np.double)
+            # tau_limit 与 URDF effort 一致：L0/R0=12, L1~L3/R1~R3=20, L4/R4=12
+            tau_limit = np.array([12, 20, 20, 20, 12, 12, 20, 20, 20, 12], dtype=np.double)
 
     if args.load_model.endswith('.onnx'):
         policy = ort.InferenceSession(args.load_model)
